@@ -1,0 +1,25 @@
+#include <types/light/bsgfx_light.h>
+#include <types/bsgfx_type.h>
+
+static void bsgfx_mapLight(const bsgfx_RawLight* unmapped, bsgfx_Light* mapped) {
+    bs_vec4 q = bs_qFromDegrees(unmapped->rotation);
+
+    *mapped = (bsgfx_Light) {
+        .position = unmapped->position,
+        .direction = bs_qMulV3(q, bs_v3(0, -1, 0)),
+        .type = unmapped->type,
+    };
+}
+
+void bsgfx_loadLights(int package_id) {
+    bs_except(BSX_FAILED_TO_QUERY);
+
+    bsgfx_type(
+        BSGFX_TYPE_LIGHT,
+        package_id,
+        BSGFX_LIGHT_VERSION,
+        "lights", "light",
+        sizeof(bsgfx_RawLight), sizeof(bsgfx_Light), bsgfx_mapLight,
+        0, 0, 0, 0);
+    bs_except(0);
+}

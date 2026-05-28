@@ -1,0 +1,42 @@
+#version 450
+#extension GL_ARB_shading_language_include : require
+
+#include "project/basilisk-gfx/shaders/bsgfx.glsl"
+#include "project/basilisk-gfx/shaders/bsgfx_bone.glsl"
+#include "project/basilisk-gfx/shaders/bsgfx_instance.glsl"
+
+#define bsgfx_IN_VERTICES          BSGFX_BINDING_VOLUME_IN_VERTICES_BONE
+#define bsgfx_IN_INDICES           BSGFX_BINDING_VOLUME_IN_INDICES_BONE
+#define bsgfx_OUT_VERTICES         BSGFX_BINDING_VOLUME_OUT_VERTICES
+
+#define BSGFX_INSTANCE_TYPE        BSGFX_INSTANCE_TYPE_BONE
+
+struct bsgfx_Vertex {
+    float x, y, z;
+    float tx, ty;
+    float nx, ny, nz;
+    int bx, by, bz, bw;
+    float wx, wy, wz, ww;
+};
+
+vec3 bsgfx_createVolumeVertex(bsgfx_Vertex vertex, int instance) {
+	vec3 position = vec3(vertex.x, vertex.y, vertex.z);
+	ivec4 bones = ivec4(vertex.bx, vertex.by, vertex.bz, vertex.bw);
+	vec4 weight = vec4(vertex.wx, vertex.wy, vertex.wz, vertex.ww);
+
+	return bsgfx_animate(instance, position, bones, weight).xyz;
+}
+
+#include "project/basilisk-gfx/shaders/bsgfx_volume.glsl"
+
+layout (local_size_x = BSGFX_VOLUME_SIZE_X, local_size_y = BSGFX_VOLUME_SIZE_Y, local_size_z = BSGFX_VOLUME_SIZE_Z) in;
+
+void main() {
+    vec4 value = vec4(0.0, 0.0, 0.0, 1.0);
+    ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
+	
+    value.x = float(texelCoord.x) / (gl_NumWorkGroups.x);
+    value.y = float(texelCoord.y) / (gl_NumWorkGroups.y);
+
+    bsgfx_createVolumes();
+}

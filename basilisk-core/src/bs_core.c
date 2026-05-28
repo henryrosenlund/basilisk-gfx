@@ -1,0 +1,2626 @@
+#include <basilisk.h>
+#include <bs_log.h>
+#include <bs_objects.h>
+#include <bs_internal.h>
+#include <bs_images.h>
+
+#include <stdio.h>
+#include <string.h>
+#include <stddef.h>
+#include <time.h>
+#include <stdarg.h>
+#include <assert.h>
+#include <math.h>
+
+#include <vulkan.h>
+
+struct VkCommandBuffer_T* bsi_fetchCommands() {
+    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT)
+        bsi_resetQueue(bs_scope.queue);
+
+    int swap = bs_queueSwap(bs_scope.queue);
+    return bs_scope.queue->_[swap].command_buffer;
+}
+
+struct VkDevice_T* bsi_fetchDevice() {
+    return _bs_instance->device;
+}
+
+int bs_currentSwap() {
+    return _bs_swapchain->frame;
+}
+
+bs_Procs* bs_procedures() {
+    return &_bs_procs;
+}
+
+bs_Swapchain* bs_swapchain() {
+    return _bs_swapchain;
+}
+
+void bs_beginComment(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    static bs_String* string;
+    string = bs_stringV(string, format, args);
+
+    va_end(args);
+
+    VkDebugUtilsLabelEXT label = {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+        .pLabelName = string->value,
+        .color = {0.3f, 0.3f, 0.9f, 1.0f}
+    };
+
+    VkCommandBuffer commands = bsi_fetchCommands();
+    assert(_bs_procs.vkCmdInsertDebugUtilsLabelEXT);
+    assert(_bs_procs.vkCmdBeginDebugUtilsLabelEXT);
+//    bs_procs.vkCmdInsertDebugUtilsLabelEXT(commands, &label);
+    _bs_procs.vkCmdBeginDebugUtilsLabelEXT(commands, &label);
+}
+
+void bs_endComment() {
+    assert(_bs_procs.vkCmdEndDebugUtilsLabelEXT);
+    _bs_procs.vkCmdEndDebugUtilsLabelEXT(bsi_fetchCommands());
+}
+
+int bs_swapCount() {
+    return _bs_settings.frames_in_flight;
+}
+
+
+  /*==============================================================================
+   * Buffers
+   *============================================================================*/
+/*
+static inline VkBufferUsageFlags bs_convertBufferType(bs_BufferType type) {
+    switch(type) {
+        case BS_BUFFER_TYPE_UNIFORM: return VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        case BS_BUFFER_TYPE_STORAGE: return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        case BS_BUFFER_TYPE_VERTEX: return VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        case BS_BUFFER_TYPE_INDEX: return VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        case BS_BUFFER_TYPE_STAGING: return VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        case BS_BUFFER_TYPE_BINDING_TABLE: return VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+        case BS_BUFFER_TYPE_ACCELERATION_STRUCTURE: return VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        case BS_BUFFER_TYPE_ACCELERATION_STRUCTURE_BUILD: return VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+        default: bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_TYPE);
+    } return 0;
+}
+
+static inline bs_U32 bs_bufferProperties(bs_BufferType type) {
+    switch (type) {
+    case BS_BUFFER_TYPE_VERTEX:
+    case BS_BUFFER_TYPE_INDEX:
+        return VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    case BS_BUFFER_TYPE_STAGING:
+    case BS_BUFFER_TYPE_UNIFORM:
+    case BS_BUFFER_TYPE_STORAGE:
+    case BS_BUFFER_TYPE_BINDING_TABLE:
+    case BS_BUFFER_TYPE_ACCELERATION_STRUCTURE:
+        return VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    case BS_BUFFER_TYPE_ACCELERATION_STRUCTURE_BUILD:
+        return VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    default: bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_TYPE);
+    } return 0;
+}
+
+*/
+static inline bs_U32 bs_queryMemoryType(bs_U32 filter, VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(_bs_instance->physical_device, &mem_props);
+
+    for (bs_U32 i = 0; i < mem_props.memoryTypeCount; i++) {
+        if ((filter & (1 << i)) && (mem_props.memoryTypes[i].propertyFlags & props) == props) {
+            return i;
+        }
+    }
+
+    bs_throwBasilisk(BSXI_INTERNAL | BSX_FAILED_TO_QUERY);
+    return 0;
+}
+
+static inline bool bs_sameBuffer(bs_Buffer* a, bs_BufferUsageFlags usage_flags, bs_MemoryPropertyFlags memory_flags, int num_bytes) {
+    return
+        a->num_bytes == num_bytes &&
+        a->usage_flags == usage_flags &&
+        a->memory_flags == memory_flags;
+}
+
+static void bs_clearAttachment(bs_U32 index, bs_ivec2 dim, VkImageAspectFlags aspect_flags, VkClearValue value) {
+    VkCommandBuffer commands = bsi_fetchCommands();
+
+    VkClearAttachment clear_attachment = {
+        .aspectMask = aspect_flags,
+        .clearValue = value,
+        .colorAttachment = index,
+    };
+
+    VkClearRect rectangle = {
+        .layerCount = 1,
+        .rect = {
+            .extent = {
+                .width = dim.x,
+                .height = dim.y,
+            },
+        },
+    };
+
+    vkCmdClearAttachments(commands, 1, &clear_attachment, 1, &rectangle);
+}
+
+void bs_clearStencil(bs_U32 index, bs_ivec2 dim, bs_U32 value) {
+    bs_clearAttachment(index, dim, VK_IMAGE_ASPECT_STENCIL_BIT, (VkClearValue) {.depthStencil.stencil = value });
+}
+
+void bs_clearDepth(bs_U32 index, bs_ivec2 dim, float value) {
+    bs_clearAttachment(index, dim, VK_IMAGE_ASPECT_DEPTH_BIT, (VkClearValue) { .depthStencil.depth = value });
+}
+
+void bs_clearDepthStencil(bs_U32 index, bs_ivec2 dim, float depth_value, bs_U32 stencil_value) {
+    bs_clearAttachment(index, dim, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, (VkClearValue) {
+        .depthStencil = {
+            .depth = depth_value,
+            .stencil = stencil_value,
+        }
+    });
+}
+
+void bs_clearColor(bs_U32 index, bs_ivec2 dim, bs_RGBA color) {
+    bs_clearAttachment(index, dim, VK_IMAGE_ASPECT_COLOR_BIT, (VkClearValue) { 
+        .color.uint32 = { 
+            [0] = color.r, [1] = color.g, [2] = color.b, [3] = color.a,
+        } 
+    });
+}
+
+void bs_stencilReference(bs_FaceType face, bs_U32 reference) {
+    assert(BS_FACE_FRONT == VK_STENCIL_FACE_FRONT_BIT);
+    assert(BS_FACE_BACK == VK_STENCIL_FACE_BACK_BIT);
+    assert(BS_FACE_FRONT_AND_BACK == VK_STENCIL_FACE_FRONT_AND_BACK);
+    VkCommandBuffer commands = bsi_fetchCommands();
+    vkCmdSetStencilReference(commands, face, reference);
+}
+
+void bs_cull(bs_CullFlags flags) {
+    VkCommandBuffer commands = bsi_fetchCommands();
+    vkCmdSetCullMode(commands, flags);
+}
+
+void bs_setLineWidth(float width) {
+    VkCommandBuffer commands = bsi_fetchCommands();
+    vkCmdSetLineWidth(commands, width);
+}
+
+int bs_bufferSwaps(bs_Buffer* buffer) {
+    return buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+}
+
+void bs_nameBuffer(bs_Buffer* buffer, const char* name) {
+    buffer->flags |= BS_BUFFER_IS_NAMED;
+    for (int i = 0; i < bs_bufferSwaps(buffer); i++)
+        bsi_nameHandle(buffer->_[i].vk_buffer, VK_OBJECT_TYPE_BUFFER, name);
+}
+
+bs_Result bs_buffer(bs_Object* object, bs_U32 num_bytes, bs_BufferUsageFlags usage_flags, bs_MemoryPropertyFlags memory_flags, bs_BufferBits flags) {
+    VkResult result;
+
+    if (num_bytes == 0)
+        return BS_RESULT_INVALID_PARAM;
+
+    if (!object)
+        return BS_RESULT_INVALID_PARAM;
+
+    if (!object->buffer)
+        return BS_RESULT_OK;
+
+    if (object->flags & BS_OBJECT_ALREADY_EXISTS && !(object->flags & BS_OBJECT_FORCE_DESTROY)) 
+        return BS_RESULT_OK;
+
+    bs_Buffer* buffer = object->buffer;
+    bs_destroyBuffer(buffer);
+
+    if (object->flags & BS_OBJECT_HAS_SWAPS_BIT)
+        flags |= BSI_BUFFER_SWAPS_BIT;
+
+    buffer->memory_flags = memory_flags;
+    buffer->usage_flags = usage_flags;
+    buffer->flags = flags;
+    buffer->num_bytes = num_bytes;
+
+    if (usage_flags & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT && num_bytes > 65536) {
+        bs_warnF("Buffer %d of size %d exceeds maximum UBO size of 65536 bytes\n", buffer->head.id, num_bytes);
+        return BS_RESULT_GENERAL_ERROR;
+    }
+
+    bs_U32 num_swaps = flags & BSI_BUFFER_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+
+    VkBufferCreateInfo buffer_i = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = num_bytes,
+        .usage = usage_flags,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+
+    VkMemoryAllocateFlagsInfo alloc_flags_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+    };
+
+    if (buffer_i.usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+        alloc_flags_info.flags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+    }
+
+    for (int i = 0; i < num_swaps; i++) {
+        result = vkCreateBuffer(
+            _bs_instance->device,
+            &buffer_i,
+            NULL,
+            &buffer->_[i].vk_buffer);
+
+        if (result != VK_SUCCESS)
+            return bs_convertVulkanResult(result);
+    }
+
+    VkMemoryRequirements mem_req;
+    vkGetBufferMemoryRequirements(
+        _bs_instance->device, 
+        buffer->_->vk_buffer,
+        &mem_req);
+
+    VkMemoryAllocateInfo alloc_i = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = mem_req.size,
+        .memoryTypeIndex = bs_queryMemoryType(mem_req.memoryTypeBits, memory_flags),
+        .pNext = &alloc_flags_info
+    };
+
+    for (int i = 0; i < num_swaps; i++) {
+        result = vkAllocateMemory(
+            _bs_instance->device,
+            &alloc_i,
+            NULL,
+            &buffer->_[i].memory);
+
+        if (result != VK_SUCCESS)
+            return bs_convertVulkanResult(result);
+
+        result = vkBindBufferMemory(
+            _bs_instance->device,
+            buffer->_[i].vk_buffer,
+            buffer->_[i].memory,
+            0);
+
+        if (result != VK_SUCCESS)
+            return bs_convertVulkanResult(result);
+    }
+
+    if (buffer->head.id)
+        bs_nameBuffer(object->buffer, bs_idName(buffer->head.source_id, buffer->head.id));
+
+    if (flags & BS_BUFFER_PRE_MAP)
+        bs_mapBuffer(object->buffer, BS_U32_MAX);
+
+    return BS_RESULT_OK;
+}
+
+char* bs_bufferMap(bs_Buffer* buffer) {
+    bs_throwIfNotMapped(buffer);
+    int swap = (buffer->flags & BSI_BUFFER_SWAPS_BIT) ? _bs_swapchain->frame : 0;
+    return buffer->_[swap].data;
+}
+
+char* bs_mapBuffer(bs_Buffer* buffer, bs_U32 num_bytes) {
+    if (!buffer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (buffer->_->data)
+        return bs_bufferMap(buffer);
+
+    if (num_bytes == BS_U32_MAX)
+        num_bytes = buffer->num_bytes;
+    else if (num_bytes > buffer->num_bytes)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS);
+
+    bs_U32 num_swaps = buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+    for (int i = 0; i < num_swaps; i++)
+        bs_throwVulkan(vkMapMemory(_bs_instance->device, buffer->_[i].memory, 0, buffer->num_bytes, 0, (void**)&buffer->_[i].data));
+
+    return bs_bufferMap(buffer);
+}
+
+void bs_unmapBuffer(bs_Buffer* buffer) {
+    if (!buffer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (buffer->_->data == NULL) return;
+
+    bs_U32 num_swaps = buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+    for (int i = 0; i < num_swaps; i++) {
+        vkUnmapMemory(_bs_instance->device, buffer->_[i].memory);
+        buffer->_[i].data = NULL;
+    }
+}
+
+void bs_stageNull(bs_Buffer* buffer) {
+    memset(bs_bufferMap(buffer), 0, buffer->num_bytes);
+}
+
+void bs_stageList(bs_Buffer* buffer, bs_List* list) {
+    bs_U32 size = list->count * list->unit_size;
+    bs_throwIfBufferTooSmall(buffer, size);
+    memcpy(bs_bufferMap(buffer), list->data, size);
+}
+
+void bs_stageImage(bs_Buffer* buffer, bs_Format format, bs_ivec2 dim, const char* data) {
+    bs_U32 size = dim.x * dim.y;
+
+    switch(format) {
+        case VK_FORMAT_R8_SRGB: size *= 1; break;
+        case VK_FORMAT_R8G8_SRGB: size *= 2; break;
+        case VK_FORMAT_R8G8B8_SRGB: size *= 3; break;
+        case VK_FORMAT_R8G8B8A8_SRGB: size *= 4; break;
+        case BS_FORMAT_R8G8B8A8_UNORM: size *= 4; break;
+        default: bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_TYPE);
+    }
+
+    bs_throwIfBufferTooSmall(buffer, size);
+
+    memcpy(bs_bufferMap(buffer), data, size);
+}
+
+void bs_destroyBuffer(bs_Buffer* buffer) {
+    assert(buffer != NULL);
+
+    bs_unmapBuffer(buffer);
+    bs_U32 num_swaps = buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+    for (int i = 0; i < num_swaps; i++) {
+        if (buffer->_[i].vk_buffer)
+            vkDestroyBuffer(_bs_instance->device, buffer->_[i].vk_buffer, NULL);
+        if (buffer->_[i].memory)
+            vkFreeMemory(_bs_instance->device, buffer->_[i].memory, NULL);
+        buffer->_[i].vk_buffer = VK_NULL_HANDLE;
+        buffer->_[i].memory = VK_NULL_HANDLE;
+    }
+
+    if (buffer->flags & BSI_BUFFER_IS_BOUND) {
+      //  bs_bindBuffer(buffer->bind_set, buffer->binding, NULL);
+     //   bs_pushDescriptors();
+    }
+
+    // TODO: make generic
+    int id = buffer->head.id;
+    int source_id = buffer->head.source_id;
+    memset(buffer, 0, sizeof(bs_Buffer));
+    buffer->head.source_id = source_id;
+    buffer->head.id = id;
+}
+
+void bs_copyAsync(bs_Buffer* src, bs_Buffer* dst, bs_U32 dst_offset, bs_U32 src_offset, bs_U32 num_bytes) {
+    if (!src || !dst)
+        return;
+
+    if (num_bytes == BS_U32_MAX)
+        num_bytes = BS_MIN(dst->num_bytes, src->num_bytes);
+
+    bs_throwIfBufferTooSmall(src, num_bytes);
+
+    VkBufferCopy copy_region = {
+        .srcOffset = src_offset,
+        .dstOffset = dst_offset,
+        .size = num_bytes
+    };
+
+    int src_swap = (src->flags & BSI_BUFFER_SWAPS_BIT) ? _bs_swapchain->frame : 0;
+    int dst_swap = (dst->flags & BSI_BUFFER_SWAPS_BIT) ? _bs_swapchain->frame : 0;
+
+    VkCommandBuffer commands = bsi_fetchCommands();
+    assert(src->_[src_swap].vk_buffer);
+    assert(dst->_[dst_swap].vk_buffer);
+    vkCmdCopyBuffer(commands, src->_[src_swap].vk_buffer, dst->_[dst_swap].vk_buffer, 1, &copy_region);
+    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    }
+}
+
+void bs_setBufferAsync(bs_Buffer* buffer, bs_U32 offset, bs_U32 num_bytes, bs_U32 value) {
+    VkCommandBuffer commands = bsi_fetchCommands();
+    int swap = buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_swapchain->frame : 0;
+    vkCmdFillBuffer(commands, buffer->_[swap].vk_buffer, offset, num_bytes, value);
+    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    }
+}
+
+static VkDeviceAddress bs_bufferAddress(VkBuffer buffer) {
+    VkBufferDeviceAddressInfo info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+        .buffer = buffer,
+    };
+
+    VkDeviceAddress address = vkGetBufferDeviceAddress(_bs_instance->device, &info);
+
+    assert(address);
+    assert((address & 0xFF) == 0);
+    return address;
+}
+
+
+
+  /*==============================================================================
+   * Batch Population
+   *============================================================================*/
+
+void bs_populateVertexDeclaration(bs_VertexDeclaration* declaration, bs_Attribute* attributes, int attributes_count) {
+    for (int i = 0, offset = 0; i < declaration->attributes_count; i++) {
+        declaration->attributes[i].source_offset = offset;
+        offset += declaration->attributes[i].source_size;
+    }
+
+    for (int i = 0; i < declaration->attributes_count;) {
+        bs_U64 hash = bs_stringHash(declaration->attributes[i].attribute_name);
+        bs_Attribute* attribute = NULL;
+
+        for (int j = 0; j < attributes_count; j++) {
+            bs_Attribute* a = attributes + j;
+            if (a->name_hash == hash) {
+                attribute = a;
+                break;
+            }
+        }
+
+        if (!attribute)
+            declaration->attributes[i] = declaration->attributes[--declaration->attributes_count];
+        else
+            declaration->attributes[i++].destination_offset = attribute->offset;
+    }
+
+    //declaration->populated = true;
+}
+
+bs_Range bs_batchRange(bs_Batch* batch, bs_U32 offset) {
+    return (bs_Range) { 
+        .offset = offset, 
+        .num = batch->indices.count - offset, 
+        .batch = batch,
+    };
+}
+
+void bs_ensureBatchSize(bs_Batch* batch, bs_U32 num_indices, bs_U32 num_vertices) {
+    bs_ensureSize(&batch->vertices, num_vertices);
+    if (num_indices != 0)
+        bs_ensureSize(&batch->indices, num_indices);
+}
+
+void bs_pushIndex(bs_Batch* batch, bs_U32 index) {
+    bs_List* indices = &batch->indices;
+
+    index += batch->vertices.count;
+    memcpy(indices->data + indices->count * indices->unit_size, &index, indices->unit_size);
+
+    indices->count++;
+}
+
+void bs_pushIndices(bs_Batch* batch, bs_U32* indices, bs_U32 num_indices) {
+    for (int i = 0; i < num_indices; i++)
+        bs_pushIndex(batch, indices[i]);
+}
+
+void bs_pushIndexV(bs_Batch* batch, bs_U32 num_indices, ...) {
+    va_list args;
+    va_start(args, num_indices);
+
+    for (int i = 0; i < num_indices; i++) {
+        bs_U32 value = va_arg(args, bs_U32);
+        bs_pushIndex(batch, value);
+    }
+
+    va_end(args);
+}
+
+// vertex
+/*
+static inline void bs_batchVertex(bs_Batch* batch, bs_U32* offset, const bs_Vertex* vertex) {
+    bs_U32 num_bytes = 0;
+    bs_U8* src = vertex;
+    float* dst = batch->vertices.data + *offset * batch->vertices.unit_size;
+
+    for (int i = 0; i < batch->attributes_count; i++) {
+        bs_Attribute* attribute = batch->attributes + i;
+
+        memcpy(dst + num_bytes / 4, src + attribute->offset, attribute->size);
+        num_bytes += attribute->size;
+    }
+
+    (*offset)++;
+}
+*/
+
+// cube
+static inline void bs_batchCube(bs_Batch* batch, bs_U32* offset, bs_RGBA color) {
+    //if (smooth_shade) {
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(-1.0, -1.0, 1.0), .color = color, .normal = bs_v3(-1.0, -1.0, 1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(1.0, -1.0, 1.0), .color = color, .normal = bs_v3(1.0, -1.0, 1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(-1.0, 1.0, 1.0), .color = color, .normal = bs_v3(-1.0, 1.0, 1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(1.0, 1.0, 1.0), .color = color, .normal = bs_v3(1.0, 1.0, 1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(-1.0, -1.0, -1.0), .color = color, .normal = bs_v3(-1.0, -1.0, -1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(1.0, -1.0, -1.0), .color = color, .normal = bs_v3(1.0, -1.0, -1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(-1.0, 1.0, -1.0), .color = color, .normal = bs_v3(-1.0, 1.0, -1.0) });
+    //    bs_batchVertex(batch, offset, &(bs_Vertex) { .position.xyz = bs_v3(1.0, 1.0, -1.0), .color = color, .normal = bs_v3(1.0, 1.0, -1.0) });
+    //
+    //}
+    //else {
+
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec3, bs_Normal,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    // top
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { -1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { -1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { -1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { 1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex){.bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 1, 0 }, .bs_Texture = { 1, 1 } }); 
+    // bottom
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, -1, 0 }, .bs_Texture = { 1, 0 } }); 
+    // left
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1,  1,  1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1,  1, -1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1, -1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1,  1, -1 }, .bs_Color = color, .bs_Normal = { -1, 0, 0 }, .bs_Texture = { 0, 1 } });
+    // right
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1,  1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1,  1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1,  1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1, -1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 1, 0, 0 }, .bs_Texture = { 1, 1 } });
+    // front
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1,  1 }, .bs_Color = color, .bs_Normal = { 0, 0, 1 }, .bs_Texture = { 1, 1 } }); 
+    // back
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 0, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 1, 1 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 1, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { -1, -1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 0, 0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { 1,  1, -1 }, .bs_Color = color, .bs_Normal = { 0, 0, -1 }, .bs_Texture = { 1, 1 } });
+}
+
+bs_Range bs_pushCube(bs_Batch* batch, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+    bs_ensureBatchSize(batch, BS_NUM_CUBE_INDICES, BS_NUM_CUBE_VERTICES);
+    //if (smooth_shade)
+    //    bs_pushIndexV(batch, BS_NUM_CUBE_INDICES,
+    //        // top
+    //        6, 2, 7,
+    //        2, 3, 7,
+    //        // bottom
+    //        0, 4, 5,
+    //        1, 0, 5,
+    //        // öeft
+    //        0, 2, 6,
+    //        4, 0, 6,
+    //        // right
+    //        3, 1, 7,
+    //        1, 5, 7,
+    //        // front
+    //        2, 0, 3,
+    //        0, 1, 3,
+    //        // back
+    //        4, 6, 7,
+    //        5, 4, 7);
+    //else
+    bs_pushIndexV(batch, BS_NUM_CUBE_INDICES,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35
+    );
+
+    bs_batchCube(batch, &batch->vertices.count, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+void bs_batchCone(bs_Batch* batch, bs_U32* offset, bs_RGBA color, int segments, float height, float radius) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) {
+        .bs_Position = { 0 },
+        .bs_Texture = { 0.5, 0.0 },
+    });
+
+    for (int i = 0, n = segments - 1; i < segments; i++) {
+        float ratio = (float)i / n;
+        float r = ratio * BS_2PI;
+        float x = cos(r) * radius;
+        float z = sin(r) * radius;
+
+        bs_batchVertex(&declaration, &(bs_Vertex) {
+            .bs_Position = { x, 0.0, z },
+            .bs_Texture = { ratio, 0.0 },
+        });
+    }
+
+    bs_batchVertex(&declaration, &(bs_Vertex) {
+        .bs_Position = { 0.0, height, 0.0 },
+        .bs_Texture = { 0.5, 1.0 },
+    });
+}
+
+void bs_batchPyramid(
+    bs_Batch* batch, bs_U32* offset,
+    bs_vec3 pos, float width, float height, bs_RGBA color
+) {
+    float half = width * 0.5f;
+
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x - half, pos.y, pos.z - half }, .bs_Texture = { 0.0, 0.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x + half, pos.y, pos.z - half }, .bs_Texture = { 1.0, 0.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x + half, pos.y, pos.z + half }, .bs_Texture = { 1.0, 1.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x - half, pos.y, pos.z + half }, .bs_Texture = { 0.0, 1.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x, pos.y + height, pos.z }, .bs_Texture = { 0.5, 0.5 } });
+}
+
+void bs_batchBipyramid(
+    bs_Batch* batch, bs_U32* offset,
+    bs_vec3 pos, float width, float height, bs_RGBA color
+) {
+    float half = width * 0.5f;
+
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x - half, pos.y, pos.z - half }, .bs_Texture = { 0.0, 0.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x + half, pos.y, pos.z - half }, .bs_Texture = { 1.0, 0.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x + half, pos.y, pos.z + half }, .bs_Texture = { 1.0, 1.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x - half, pos.y, pos.z + half }, .bs_Texture = { 0.0, 1.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x, pos.y + height, pos.z }, .bs_Texture = { 0.5, 0.0 } });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = { pos.x, pos.y - height, pos.z }, .bs_Texture = { 0.5, 1.0 } });
+}
+
+void bs_batchQuad(bs_Batch* batch, bs_U32* offset, bs_Quad quad, bs_RGBA color) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { quad.a, quad.ca, color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { quad.b, quad.cb, color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { quad.c, quad.cc, color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { quad.d, quad.cd, color });
+}
+
+void bs_batchTriangle(bs_Batch* batch, bs_U32* offset, bs_vec3 a, bs_vec3 b, bs_vec3 c, bs_RGBA color) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = a, .bs_Texture = bs_v2(0.0, 0.0), .bs_Color = color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = b, .bs_Texture = bs_v2(1.0, 0.0), .bs_Color = color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = c, .bs_Texture = bs_v2(0.0, 1.0), .bs_Color = color });
+}
+
+void bs_batchLine(bs_Batch* batch, bs_U32* offset, bs_vec3 a, bs_vec3 b, bs_RGBA color) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = a, .bs_Texture = bs_v2(0.0, 0.0), .bs_Color = color });
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = b, .bs_Texture = bs_v2(1.0, 0.0), .bs_Color = color });
+}
+
+void bs_batchPoint(bs_Batch* batch, bs_U32* offset, bs_vec3 pos, bs_RGBA color) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    bs_batchVertex(&declaration, &(bs_Vertex) { .bs_Position = pos, .bs_Color = color });
+}
+
+void bs_batchAabb(bs_Batch* batch, bs_U32* offset, bs_Aabb* aabb, bs_RGBA color) {
+    // top
+    bs_batchLine(batch, offset, aabb->min, bs_v3(aabb->max.x, aabb->min.y, aabb->min.z), color);
+    bs_batchLine(batch, offset, aabb->min, bs_v3(aabb->min.x, aabb->min.y, aabb->max.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->max.x, aabb->min.y, aabb->max.z), bs_v3(aabb->max.x, aabb->min.y, aabb->min.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->max.x, aabb->min.y, aabb->max.z), bs_v3(aabb->min.x, aabb->min.y, aabb->max.z), color);
+    // bottom
+    bs_batchLine(batch, offset, aabb->max, bs_v3(aabb->min.x, aabb->max.y, aabb->max.z), color);
+    bs_batchLine(batch, offset, aabb->max, bs_v3(aabb->max.x, aabb->max.y, aabb->min.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->min.x, aabb->max.y, aabb->min.z), bs_v3(aabb->min.x, aabb->max.y, aabb->max.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->min.x, aabb->max.y, aabb->min.z), bs_v3(aabb->max.x, aabb->max.y, aabb->min.z), color);
+    // sides
+    bs_batchLine(batch, offset, aabb->min, bs_v3(aabb->min.x, aabb->max.y, aabb->min.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->min.x, aabb->min.y, aabb->max.z), bs_v3(aabb->min.x, aabb->max.y, aabb->max.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->max.x, aabb->min.y, aabb->min.z), bs_v3(aabb->max.x, aabb->max.y, aabb->min.z), color);
+    bs_batchLine(batch, offset, bs_v3(aabb->max.x, aabb->min.y, aabb->max.z), bs_v3(aabb->max.x, aabb->max.y, aabb->max.z), color);
+}
+
+void bs_batchSphere(bs_Batch* batch, bs_U32* offset, bs_vec3 position, float radius, bs_U32 lats, bs_U32 longs, bs_RGBA color) {
+    BS_VERTEX_DECLARATION(
+        declaration, batch, offset,
+        bs_vec3, bs_Position,
+        bs_vec3, bs_Normal,
+        bs_vec2, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    float length_inverse = 1.0 / radius;
+    float sector_step = 2.0 * BS_PI / lats;
+    float stack_step = BS_PI / longs;
+
+    for (int i = 0; i <= longs; i++) {
+        float stack_angle = BS_PI / 2.0 - i * stack_step;
+        float xy = radius * cosf(stack_angle);
+        float z = radius * sinf(stack_angle);
+
+        for (int j = 0; j <= lats; j++) {
+            float sector_angle = j * sector_step;
+            float x = xy * cosf(sector_angle);
+            float y = xy * sinf(sector_angle);
+
+            bs_batchVertex(&declaration, &(const bs_Vertex) {
+                .bs_Position = bs_v3Add(position, bs_v3(x, y, z)),
+                .bs_Normal = bs_v3MulV1(bs_v3(x, y, z), length_inverse),
+                .bs_Texture = bs_v2((float)j / lats, (float)i / longs),
+                .bs_Color = color,
+            });
+        }
+    }
+}
+
+
+
+  /*==============================================================================
+   * Batch Pushes
+   *============================================================================*/
+
+bs_Range bs_pushRectangle(bs_Batch* batch, bs_vec3 position, bs_vec2 dimensions, bs_vec2 texture_offset, bs_vec2 texture_coords, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_Quad quad = bs_quad(position, dimensions);
+    bs_quadTextureCoords(&quad, texture_offset, texture_coords);
+
+    bs_ensureBatchSize(batch, 6, 4);
+    bs_pushIndexV(batch, 6, 1, 2, 0, 2, 1, 3);
+    bs_batchQuad(batch, &batch->vertices.count, quad, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushQuad(bs_Batch* batch, bs_Quad quad, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, 6, 4);
+    bs_pushIndexV(batch, 6, 1, 2, 0, 2, 1, 3);
+    bs_batchQuad(batch, &batch->vertices.count, quad, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushTriangle(bs_Batch* batch, bs_vec3 a, bs_vec3 b, bs_vec3 c, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, 3, 3);
+    bs_pushIndexV(batch, 3, 0, 1, 2);
+    bs_batchTriangle(batch, &batch->vertices.count, a, b, c, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushLine(bs_Batch* batch, bs_vec3 a, bs_vec3 b, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, 2, 2);
+    bs_pushIndexV(batch, 2, 0, 1);
+    bs_batchLine(batch, &batch->vertices.count, a, b, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushRay(bs_Batch* batch, bs_Ray* ray, bs_RGBA color) {
+    bs_vec3 end = bs_v3Add(ray->origin, bs_v3MulV1(ray->direction, ray->length));
+    return bs_pushLine(batch, ray->origin, end, color);
+}
+
+bs_Range bs_pushPoint(bs_Batch* batch, bs_vec3 pos, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, 1, 1);
+    bs_pushIndexV(batch, 1, 0);
+    bs_batchPoint(batch, &batch->vertices.count, pos, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushAabb(bs_Batch* batch, bs_Aabb* aabb, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, 24, 24);
+    for (bs_U32 i = 0; i < 24; i++)
+        bs_pushIndex(batch, i);
+    bs_batchAabb(batch, &batch->vertices.count, aabb, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushSphere(bs_Batch* batch, bs_vec3 position, float radius, bs_U32 lats, bs_U32 longs, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+
+    bs_ensureBatchSize(batch, lats * longs * 3 * 2, (lats + 1) * (longs + 1));
+
+    for (int i = 0; i < longs; ++i) {
+        int k1 = i * (lats + 1);
+        int k2 = k1 + lats + 1;
+
+        for (int j = 0; j < lats; ++j, ++k1, ++k2) {
+            if (i != 0)
+                bs_pushIndexV(batch, 3, k1, k2, k1 + 1);
+
+            if (i != (longs - 1))
+                bs_pushIndexV(batch, 3, k1 + 1, k2, k2 + 1);
+        }
+    }
+
+    bs_batchSphere(batch, &batch->vertices.count, position, radius, lats, longs, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushPyramid(
+    bs_Batch* batch, bs_vec3 pos, float width, float height, bs_RGBA color
+) {
+    int index_offset = batch->indices.count;
+    int num_vertices = 5; // 4 base + 1 apex
+    int num_indices = 18; // 6 triangles (2 for base + 4 sides) × 3
+
+    bs_ensureBatchSize(batch, num_indices, num_vertices);
+
+    bs_pushIndexV(batch, 3, 0, 1, 2);
+    bs_pushIndexV(batch, 3, 0, 2, 3);
+
+    bs_pushIndexV(batch, 3, 0, 1, 4);
+    bs_pushIndexV(batch, 3, 1, 2, 4);
+    bs_pushIndexV(batch, 3, 2, 3, 4);
+    bs_pushIndexV(batch, 3, 3, 0, 4);
+
+    bs_batchPyramid(batch, &batch->vertices.count, pos, width, height, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushBipyramid(
+    bs_Batch* batch, bs_vec3 pos, float width, float height, bs_RGBA color
+) {
+    int index_offset = batch->indices.count;
+    int num_vertices = 6; // 4 base + top + bottom
+    int num_indices = 24; // 8 triangles × 3
+
+    bs_ensureBatchSize(batch, num_indices, num_vertices);
+
+    bs_pushIndexV(batch, 3, 0, 1, 4);
+    bs_pushIndexV(batch, 3, 1, 2, 4);
+    bs_pushIndexV(batch, 3, 2, 3, 4);
+    bs_pushIndexV(batch, 3, 3, 0, 4);
+
+    bs_pushIndexV(batch, 3, 1, 0, 5);
+    bs_pushIndexV(batch, 3, 2, 1, 5);
+    bs_pushIndexV(batch, 3, 3, 2, 5);
+    bs_pushIndexV(batch, 3, 0, 3, 5);
+
+    bs_batchBipyramid(batch, &batch->vertices.count, pos, width, height, color);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushCone(bs_Batch* batch, int segments, float height, float radius, bs_RGBA color) {
+    int index_offset = batch->indices.count;
+    int num_indices = (segments * 1) * 3;
+    int num_vertices = segments + 2;
+
+    bs_ensureBatchSize(batch, num_indices, num_vertices);
+
+    for (int i = 0, n = segments - 1; i < n; i++)
+        bs_pushIndexV(batch, 3, 0, i + 1, i + 2);
+
+    for (int i = 0, n = segments - 1; i < n; i++)
+        bs_pushIndexV(batch, 3, i + 1, segments + 1, i + 2);
+
+    bs_batchCone(batch, &batch->vertices.count, color, segments, height, radius);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushPrimitive(bs_Batch* batch, bs_Primitive* primitive) {
+    bs_U32* increment = &batch->vertices.count;
+    int index_offset = batch->indices.count;
+
+    BS_VERTEX_DECLARATION(
+        declaration, batch, increment,
+        bs_vec3, bs_Position,
+        bs_vec2, bs_Texture,
+        bs_vec3, bs_Normal,
+      //  bs_RGBA, bs_Color,
+        bs_ivec4, bs_Bone,
+        bs_vec4, bs_Weight
+    );
+
+    bs_ensureBatchSize(batch, primitive->num_indices, primitive->num_vertices);
+    bs_pushIndices(batch, primitive->indices, primitive->num_indices);
+
+    float* vertex = primitive->vertices;
+    for(int i = 0; i < primitive->num_vertices; i++, vertex += primitive->vertex_size) {
+        bs_batchVertex(&declaration, &(bs_Vertex) {
+            .bs_Position = *(bs_vec3*)(vertex),
+            .bs_Texture = *(bs_vec2*)(vertex + primitive->texture_offset),
+            .bs_Normal = *(bs_vec3*)(vertex + primitive->normal_offset),
+         //   .bs_Color = BS_WHITE,
+            .bs_Bone = *(bs_ivec4*)(vertex + primitive->bone_offset),
+            .bs_Weight = *(bs_vec4*)(vertex + primitive->weight_offset),
+        });
+    }
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushMesh(bs_Batch* batch, bs_Mesh* mesh) {
+    int index_offset = batch->indices.count;
+
+    for(int i = 0; i < mesh->primitives_count; i++)
+        bs_pushPrimitive(batch, mesh->primitives + i);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+bs_Range bs_pushModel(bs_Batch* batch, bs_Model* model) {
+    int index_offset = batch->indices.count;
+
+    for(int i = 0; i < model->meshes_count; i++)
+        bs_pushMesh(batch, model->meshes + i);
+
+    return bs_batchRange(batch, index_offset);
+}
+
+/*
+void bs_pushGlyph(bs_Batch* batch, bs_Font* font, bs_Glyph* glyph, bs_vec3 pos, bs_RGBA col, float scale) {
+    pos.y += (float)glyph->y_min * font->scale;
+
+    bs_Quad quad = bs_quad(pos, bs_v2MulV1(bs_v2(glyph->width, BS_TTF_DIM), scale));
+    bs_quadTextureCoords(&quad, glyph->tex_offset, glyph->tex_coord);
+    bs_pushQuad(batch, quad, col, NULL);
+}
+
+void bs_pushText(bs_Batch* batch, bs_Font* font, bs_vec3 pos, bs_RGBA col, float scale, const char* text, va_list args) {
+    bs_Range batch_part = (bs_Range){ batch->indices.num_units, 0 };
+
+    char buf[512];
+    int len = vsprintf(buf, text, args);
+
+    float original_x = pos.x;
+    for (int i = 0; i < len; i++) {
+        bs_Glyph* glyph = bs_glyph(font, buf[i]);
+
+        switch (buf[i]) {
+        case ' ': pos.x += BS_TTF_DIM * scale / 3.0; break;
+        case '\n': {
+            pos.y -= BS_TTF_DIM * scale;
+            pos.x = original_x;
+        } break;
+        default: {
+            if (buf[i] != ' ') {
+                bs_pushGlyph(batch, font, glyph, pos, col, scale);
+                pos.x += (float)glyph->long_hor_metric.advance_width * font->scale * scale;
+            }
+        } break;
+        }
+    }
+}
+*/
+
+
+
+  /*==============================================================================
+   * Batches
+   *============================================================================*/
+
+bs_Attribute* bs_queryAttribute(bs_Batch* batch, char* name) {
+    bs_U64 name_hash = bs_stringHash(name);
+    for (int i = 0; i < batch->attributes_count; i++) {
+        bs_Attribute* attribute = batch->attributes + i;
+
+        if (attribute->name_hash == name_hash)
+            return attribute;
+    }
+
+    bs_throwBasilisk(BSX_FAILED_TO_QUERY);
+    return NULL;
+}
+
+#define BS_BATCH_INCR_BY 256
+bs_Object* bs_batch(bs_Object* object, int index_size, bs_Shader* shader, bs_BatchBits flags) {
+    bs_Batch* batch = object->batch;
+
+    if (!batch) return NULL;
+    if (object->flags & BS_OBJECT_ALREADY_EXISTS && !(object->flags & BS_OBJECT_FORCE_DESTROY)) return NULL;
+
+    assert(shader != NULL);
+
+    bs_destroyBatch(batch);
+
+    bs_U32 vertex_size = 0;
+    for (int i = 0; i < shader->num_attributes; i++)
+        vertex_size += shader->attributes[i].size;
+
+    if (object->flags & BS_OBJECT_HAS_SWAPS_BIT)
+        flags |= BSI_BATCH_SWAPS_BIT;
+
+    batch->flags = flags;
+    batch->attributes = shader->attributes;
+    batch->attributes_count = shader->num_attributes;
+    batch->vertices = bs_list(vertex_size, BS_BATCH_INCR_BY);
+    batch->indices = bs_list(index_size, BS_BATCH_INCR_BY);
+
+    return object;
+}
+
+bool bs_batchIsPushed(bs_Batch* batch) {
+    if (!batch)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+    return batch->flags & BS_BATCH_IS_PUSHED;
+}
+
+bool bs_batchIsIndexed(bs_Batch* batch) {
+    if (!batch)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+    return batch->indices.unit_size > 0;
+}
+
+void bs_minimizeBatch(bs_Batch* batch) {
+    bs_minimizeList(&batch->vertices);
+    bs_minimizeList(&batch->indices);
+}
+
+static struct bs_BatchBindings {
+    bs_U32 vertex_binding, index_binding, staging_binding;
+    bs_U32 vertex_bind_set, index_bind_set, staging_bind_set;
+    bool vertex_was_bound, index_was_bound, staging_was_bound;
+} bs_batchBindings(bs_Batch* batch) {
+    struct bs_BatchBindings bindings = { 0 };
+
+    if (batch->vertex_buffer && (bindings.vertex_was_bound = batch->vertex_buffer->buffer->flags & BSI_BUFFER_IS_BOUND)) {
+        bindings.vertex_binding = batch->vertex_buffer->buffer->binding;
+        bindings.vertex_bind_set = batch->vertex_buffer->buffer->bind_set;
+    }
+
+    if (batch->index_buffer && (bindings.index_was_bound = batch->index_buffer->buffer->flags & BSI_BUFFER_IS_BOUND)) {
+        bindings.index_binding = batch->index_buffer->buffer->binding;
+        bindings.index_bind_set = batch->index_buffer->buffer->bind_set;
+    }
+
+    if (batch->staging_buffer && (bindings.staging_was_bound = batch->staging_buffer->buffer->flags & BSI_BUFFER_IS_BOUND)) {
+        bindings.staging_binding = batch->staging_buffer->buffer->binding;
+        bindings.staging_bind_set = batch->staging_buffer->buffer->bind_set;
+    }
+
+    return bindings;
+};
+
+bs_Result bs_pushBatch(bs_Batch* batch, bs_U32 num_indices, bs_U32 num_vertices) {
+    bs_Result result;
+
+    if (!batch)
+        return BS_RESULT_INVALID_PARAM;
+
+    if (num_indices == BS_U32_MAX) 
+        num_indices = batch->indices.count;
+
+    if (num_vertices == BS_U32_MAX) 
+        num_vertices = batch->vertices.count;
+
+    bs_U32 vertex_size = num_vertices * batch->vertices.unit_size;
+    bs_U32 index_size = num_indices * batch->indices.unit_size;
+    struct bs_BatchBindings bindings = bs_batchBindings(batch);
+
+    if (vertex_size == 0) {
+        bs_destroyBatch(batch);
+        return BS_RESULT_OK;
+    }
+
+    bs_U32 object_flags = (batch->flags & BSI_BATCH_SWAPS_BIT) ? BS_OBJECT_HAS_SWAPS_BIT : 0;
+    bs_BufferUsageFlags usage_flags = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+    if (batch->flags & BS_BATCH_RAY_TRACEABLE)
+        usage_flags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+
+   /**
+    Staging buffer
+    */
+    batch->staging_buffer = BS_BUFFER(-1, 0, object_flags);
+    result = bs_buffer(batch->staging_buffer, bs_imax(vertex_size, index_size),
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyBatch(batch);
+        return result;
+    }
+
+    bs_mapBuffer(batch->staging_buffer->buffer, vertex_size);
+    bs_nameBuffer(batch->staging_buffer->buffer, "staging");
+
+    if (bindings.staging_was_bound)
+        bs_bindBuffer(bindings.staging_bind_set, bindings.staging_binding, batch->staging_buffer->buffer);
+
+   /**
+    Vertex buffer
+    */
+    batch->vertex_buffer = BS_BUFFER(-1, 0, object_flags);
+    result = bs_buffer(BS_BUFFER(-1, 0, object_flags), vertex_size,
+        usage_flags | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyBatch(batch);
+        return result;
+    }
+
+    bs_stageList(batch->staging_buffer->buffer, &batch->vertices);
+    bs_copyAsync(batch->staging_buffer->buffer, batch->vertex_buffer->buffer, 0, 0, BS_U32_MAX);
+    bs_nameBuffer(batch->vertex_buffer->buffer, "vertex");
+
+    if (bindings.vertex_was_bound)
+        bs_bindBuffer(bindings.vertex_bind_set, bindings.vertex_binding, batch->vertex_buffer->buffer);
+
+   /**
+    Index buffer
+    */
+    if (batch->indices.unit_size != 0) {
+        bool invalid_size = batch->indices.unit_size != sizeof(bs_U16) && batch->indices.unit_size != sizeof(bs_U32);
+        if (invalid_size)
+            bs_throwBasilisk(BSXI_INTERNAL | BSX_UNKNOWN_TYPE_SIZE);
+
+        if (batch->indices.count != 0) {
+            bs_stageList(batch->staging_buffer->buffer, &batch->indices);
+
+            batch->index_buffer = BS_BUFFER(-1, 0, object_flags);
+            result = bs_buffer(batch->index_buffer, index_size,
+                usage_flags | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                0);
+
+            if (result != BS_RESULT_OK) {
+                bs_destroyBatch(batch);
+                return result;
+            }
+
+            bs_copyAsync(batch->staging_buffer->buffer, batch->index_buffer->buffer, 0, 0, BS_U32_MAX);
+            bs_nameBuffer(batch->index_buffer->buffer, "index");
+        }
+
+        if (bindings.index_was_bound)
+            bs_bindBuffer(bindings.index_bind_set, bindings.index_binding, batch->index_buffer->buffer);
+    }
+
+    if (!(batch->flags & BS_BATCH_KEEP_DATA)) {
+        bs_destroyList(&batch->vertices);
+        bs_destroyList(&batch->indices);
+    }
+
+    if (bindings.vertex_was_bound || bindings.index_was_bound || bindings.staging_was_bound)
+        bs_pushDescriptors();
+
+    batch->flags |= BS_BATCH_IS_PUSHED;
+
+    return result;
+}
+
+void bs_unpushBatch(bs_Batch* batch) {
+    bs_destroyBatch(batch);
+    batch->vertices.count = 0;
+    batch->indices.count = 0;
+
+    // If uncomment beware of the bs_destroyBatch memset
+
+   // if (!(batch->flags & BS_BATCH_KEEP_DATA)) {
+      //  batch->vertices = vertices;
+      //  batch->indices = indices;
+   // }
+}
+
+int bs_batchSize(bs_Batch* batch) {
+    return (batch->indices.unit_size == 0) ? batch->vertices.count : batch->indices.count;
+}
+
+void bs_render(bs_Batch* batch, bs_Pipeline* pipeline, bs_U32 vertex_offset, bs_U32 vertex_count, bs_U32 instance_offset, bs_U32 instance_count) {
+    if (!batch || !pipeline)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    VkDeviceSize offsets[] = { 0 };
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    int batch_size = bs_batchSize(batch);
+    vertex_count = vertex_count == BS_U32_MAX ? batch_size : vertex_count;
+    if (vertex_count == 0) return;
+    if (instance_offset < 0) return;
+    if (instance_count <= 0) return;
+    if (!batch->vertex_buffer) return;
+
+    bs_U32 vertex_swap = (batch->vertex_buffer->buffer->flags & BSI_BUFFER_SWAPS_BIT) ? _bs_swapchain->frame : 0;
+    if (!batch->vertex_buffer->buffer->_[vertex_swap].vk_buffer)
+        return;
+
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
+    if (pipeline->num_bind_sets != 0) {
+        vkCmdBindDescriptorSets(
+            command_buffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipeline->layout,
+            0, pipeline->num_bind_sets, _bs_instance->sets, 0, NULL
+        );
+    }
+
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &batch->vertex_buffer->buffer->_[vertex_swap].vk_buffer, offsets);
+
+    if (!bs_batchIsIndexed(batch)) {
+        vkCmdDraw(command_buffer, vertex_count, instance_count, vertex_offset, instance_offset);
+    } else {
+        bs_U32 index_swap = (batch->index_buffer->buffer->flags & BSI_BUFFER_SWAPS_BIT) ? _bs_swapchain->frame : 0;
+        vkCmdBindIndexBuffer(command_buffer, batch->index_buffer->buffer->_[index_swap].vk_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(command_buffer, vertex_count, instance_count, vertex_offset, 0, instance_offset);
+    }
+}
+
+void bs_destroyBatch(bs_Batch* batch) {
+    assert(batch != NULL);
+
+    batch->flags &= ~(BS_BATCH_IS_PUSHED);
+
+    if (batch->index_buffer && batch->indices.unit_size)
+        bs_destroyBuffer(batch->index_buffer->buffer);
+    if (batch->vertex_buffer)
+        bs_destroyBuffer(batch->vertex_buffer->buffer);
+    if (batch->staging_buffer)
+        bs_destroyBuffer(batch->staging_buffer->buffer);
+
+    if (!(batch->flags & BS_BATCH_KEEP_DATA)) {
+        bs_destroyList(&batch->vertices);
+        bs_destroyList(&batch->indices);
+    }
+}
+
+
+
+  /*==============================================================================
+   * Renderer 
+   *============================================================================*/
+
+bs_Object* bs_renderer(bs_Object* object, bs_RendererBits flags) {
+    assert(object != NULL);
+    bs_Renderer* renderer = object->renderer;
+
+    if (!renderer) return NULL;
+    if (object->flags & BS_OBJECT_ALREADY_EXISTS && !(object->flags & BS_OBJECT_FORCE_DESTROY)) return NULL;
+
+    bs_destroyRenderer(renderer);
+
+    if (object->flags & BS_OBJECT_HAS_SWAPS_BIT)
+        flags |= BSI_RENDERER_HAS_SWAPS_BIT;
+
+    renderer->flags = flags;
+    renderer->inputs = bs_malloc(BS_MAX_NUM_ATTACHMENTS * sizeof(bs_Input));
+    renderer->outputs = bs_malloc(BS_MAX_NUM_ATTACHMENTS * sizeof(bs_Output));
+    renderer->dependencies = bs_malloc(BS_MAX_NUM_SUBPASS_DEPENDENCIES * sizeof(VkSubpassDependency));
+
+    // BS_MAX(_bs_settings.frames_in_flight, _bs_settings.buffer_count_min)
+
+    return object;
+}
+
+void bs_output(bs_Renderer* renderer, bs_Output output) {
+    assert(renderer != NULL);
+    assert(output.image != NULL);
+
+    if (renderer->num_outputs >= BS_MAX_NUM_ATTACHMENTS)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS);
+
+    renderer->outputs[renderer->num_outputs++] = output;
+}
+
+void bs_input(bs_Renderer* renderer, bs_Input input) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (renderer->num_inputs >= BS_MAX_NUM_ATTACHMENTS)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS);
+
+    renderer->inputs[renderer->num_inputs++] = input;
+}
+
+void bs_dependency(bs_Renderer* renderer, bs_U32 src_subpass, bs_U32 dst_subpass, bs_DependencyFlags flags, bs_PipelineStage src_stage, bs_PipelineStage dst_stage, bs_AccessMask src_access, bs_AccessMask dst_access) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (renderer->num_dependencies >= BS_MAX_NUM_SUBPASS_DEPENDENCIES)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS);
+
+    renderer->dependencies[renderer->num_dependencies++] = (VkSubpassDependency) {
+        .srcSubpass = src_subpass,
+        .dstSubpass = dst_subpass,
+        .srcStageMask = src_stage,
+        .dstStageMask = dst_stage,
+        .srcAccessMask = src_access,
+        .dstAccessMask = dst_access,
+        .dependencyFlags = flags
+    };
+}
+
+static int bs_sortInputs(const bs_Input* a, const bs_Input* b) {
+    if (a->subpass != b->subpass)
+        return (a->subpass < b->subpass) ? -1 : 1;
+    else return 0;
+}
+
+static int bs_sortOutputs(const bs_Output* a, const bs_Output* b) {
+    bool is_depth_a = bs_isDepthFormat(a->image->format);
+    bool is_depth_b = bs_isDepthFormat(b->image->format);
+
+    if (a->subpass != b->subpass)
+        return (a->subpass < b->subpass) ? -1 : 1;
+    else if (is_depth_a != is_depth_b)
+        return is_depth_a ? 1 : -1;
+    else return (a->attachment < b->attachment) ? -1 : 1;
+}
+
+void bs_renderPass(bs_Renderer* renderer) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (renderer->render_pass)
+        return bs_warnF("Renderer (%d) already has a render pass\n", renderer->head.id);
+
+    VkSubpassDescription subpasses[BS_MAX_NUM_SUBPASSES] = { 0 };
+    VkAttachmentDescription attachments[BS_MAX_NUM_ATTACHMENTS] = { 0 };
+
+    qsort(renderer->inputs, renderer->num_inputs, sizeof(bs_Input), bs_sortInputs);
+    qsort(renderer->outputs, renderer->num_outputs, sizeof(bs_Output), bs_sortOutputs);
+
+    VkAttachmentReference attachment_references[BS_MAX_NUM_ATTACHMENTS] = { 0 };
+    VkAttachmentReference input_references[BS_MAX_NUM_ATTACHMENTS] = { 0 };
+
+    for (int i = 0; i < renderer->num_outputs; i++) {
+        bs_Output* output = renderer->outputs + i;
+        renderer->num_subpasses = BS_MAX(renderer->num_subpasses, output->subpass);
+
+        bool is_stencil = bs_isStencilFormat(output->image->format);
+        bool is_depth = bs_isDepthFormat(output->image->format);
+
+        assert(output->subpass < BS_MAX_NUM_SUBPASSES);
+
+        attachments[i] = (VkAttachmentDescription) {
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = output->load_op,
+            .storeOp = output->store_op,
+            .stencilLoadOp = is_stencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = is_stencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .format = output->image->format,
+            .initialLayout = output->old_layout,
+            .finalLayout = output->new_layout,
+        };
+
+        VkSubpassDescription* subpass = subpasses + output->subpass;
+        VkAttachmentReference* reference = attachment_references + i;
+
+        if (is_depth) {
+            *reference = (VkAttachmentReference) {
+                .attachment = i,
+                .layout = output->new_layout == BS_LAYOUT_GENERAL ? VK_IMAGE_LAYOUT_GENERAL :
+                    (is_stencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
+            };
+
+            subpass->pDepthStencilAttachment = reference;
+            renderer->flags |= (1 << output->subpass);
+        }
+        else {
+            if (!subpass->pColorAttachments)
+                subpass->pColorAttachments = reference;
+
+            *reference = (VkAttachmentReference) {
+                .attachment = i,
+                .layout = output->new_layout == BS_LAYOUT_GENERAL ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL
+            };
+
+            subpass->colorAttachmentCount++;
+        }
+    }
+
+    for (int i = 0; i < renderer->num_inputs; i++) {
+        bs_Input* input = renderer->inputs + i;
+        renderer->num_subpasses = BS_MAX(renderer->num_subpasses, input->subpass);
+
+        VkSubpassDescription* subpass = subpasses + input->subpass;
+        VkAttachmentReference* reference = input_references + i;
+        *reference = (VkAttachmentReference) {
+            .attachment = input->attachment,
+            .layout = input->subpass == renderer->outputs[input->attachment].subpass ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL
+        };
+
+        if (!subpass->pInputAttachments)
+            subpass->pInputAttachments = reference;
+
+        subpass->inputAttachmentCount++;
+    }
+
+    VkRenderPassCreateInfo render_pass_ci = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = renderer->num_outputs,
+        .pAttachments = attachments,
+        .subpassCount = ++renderer->num_subpasses,
+        .pSubpasses = subpasses,
+        .dependencyCount = renderer->num_dependencies,
+        .pDependencies = renderer->dependencies,
+    };
+
+    bs_throwVulkan(vkCreateRenderPass(_bs_instance->device, &render_pass_ci, NULL, &renderer->render_pass));
+
+    const char* id_name = renderer->head.id == 0 ? NULL : bs_idName(renderer->head.source_id, renderer->head.id);
+    if (id_name)
+        bsi_nameHandleF(renderer->render_pass, VK_OBJECT_TYPE_RENDER_PASS, "(%d) renderer " BS_PRINT_CYAN "%s" BS_PRINT_RESET, renderer->head.id, id_name);
+}
+
+void bs_framebuffer(bs_Renderer* renderer, bs_ivec2 dim) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    if (renderer->_->framebuffer)
+        return bs_warnF("Renderer (%d) already has a framebuffer\n", renderer->head.id);
+
+    VkImageView vk_views[BS_MAX_NUM_ATTACHMENTS] = { 0 };
+    renderer->dim = dim;
+
+    int swaps_count = bs_rendererSwapsCount(renderer);
+    for (int i = 0; i < swaps_count; i++) {
+        for (int j = 0; j < renderer->num_outputs; j++) {
+            bs_Output* output = renderer->outputs + j;
+
+            int swap = output->image->flags & BS_IMAGE_SWAPS_BIT ? i : 0;
+            vk_views[j] = output->image->_[swap].view;
+        }
+
+        VkFramebufferCreateInfo framebuf_ci = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = renderer->render_pass,
+            .attachmentCount = renderer->num_outputs,
+            .pAttachments = vk_views,
+            .width = renderer->dim.x,
+            .height = renderer->dim.y,
+            .layers = 1,
+        };
+
+        struct bs_RendererSwaps* swaps = renderer->_;
+        bs_throwVulkan(vkCreateFramebuffer(_bs_instance->device, &framebuf_ci, NULL, &renderer->_[i].framebuffer));
+    }
+}
+
+bool bs_rendererIsDynamic(bs_Renderer* renderer) {
+    return renderer->render_pass == NULL;
+}
+
+void bs_beginRender(bs_Renderer* renderer) {
+    assert(renderer != NULL);
+
+    if (bs_scope.renderer)
+        return bs_throwBasiliskF(BSX_INVALID_STATE, "Cannot dynamically render within a render pass");
+
+    bs_scope.renderer = renderer;
+
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    VkClearValue clear_values[BS_MAX_NUM_ATTACHMENTS] = { 0 };
+
+    for (int i = 0; i < renderer->num_outputs; i++) {
+        bs_Output* output = renderer->outputs + i;
+
+        if (bs_isDepthFormat(output->image->format))
+            clear_values[i].depthStencil.depth = 1.0;
+        else
+            clear_values[i].color.float32[3] = 1.0;
+    }
+
+    if (renderer->render_pass) {
+        bs_scope.renderer = renderer;
+
+        VkRenderPassBeginInfo render_pass_i = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = renderer->render_pass,
+            .framebuffer = renderer->_[bs_image_index].framebuffer,
+            .renderArea.extent = {
+                .width = renderer->dim.x,
+                .height = renderer->dim.y,
+            },
+            .clearValueCount = renderer->num_outputs,
+            .pClearValues = clear_values,
+        };
+
+        vkCmdBeginRenderPass(command_buffer, &render_pass_i, VK_SUBPASS_CONTENTS_INLINE);
+    }
+    else {
+        if (!_bs_procs.vkCmdBeginRenderingKHR || !_bs_procs.vkCmdEndRenderingKHR)
+            bs_throwBasiliskF(BSX_NOT_SUPPORTED, "Dynamic rendering (vkCmdBeginRenderingKHR)");
+
+        VkRenderingAttachmentInfo* attachments = _alloca(renderer->num_outputs * sizeof(VkRenderingAttachmentInfo));
+        VkRenderingAttachmentInfo* depth_attachment = NULL;
+        int color_attachments_count = renderer->num_outputs;
+
+        for (int i = 0; i < renderer->num_outputs; i++) {
+            bs_Output* output = renderer->outputs + i;
+
+            attachments[i] = (VkRenderingAttachmentInfo){
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = output->image->_[output->image->flags & BS_IMAGE_SWAPS_BIT ? bs_image_index : 0].view,
+                .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            };
+
+            if (bs_isDepthFormat(renderer->outputs[i].image->format)) {
+                depth_attachment = attachments + i; // should only be 1
+                color_attachments_count--;
+            }
+        }
+
+        VkRenderingInfoKHR rendering_info = {
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
+            .renderArea = {
+                .extent = {
+                    .width = renderer->dim.x,
+                    .height = renderer->dim.y,
+                },
+            },
+            .layerCount = 1,
+            .colorAttachmentCount = color_attachments_count,
+            .pColorAttachments = attachments,
+            .pDepthAttachment = depth_attachment,
+            .pStencilAttachment = VK_NULL_HANDLE,
+        };
+
+        _bs_procs.vkCmdBeginRenderingKHR(command_buffer, &rendering_info);
+    }
+
+    VkViewport viewport = {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = renderer->dim.x,
+        .height = renderer->dim.y,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+
+    vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+    VkRect2D scissor = {
+        .extent = {
+            .width = renderer->dim.x,
+            .height = renderer->dim.y,
+        },
+    };
+
+    vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+}
+
+void bs_endRender(bs_Renderer* renderer) {
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+    if (renderer->render_pass) {
+        bs_scope.renderer = renderer;
+        vkCmdEndRenderPass(command_buffer);
+    }
+    else {
+        _bs_procs.vkCmdEndRenderingKHR(bsi_fetchCommands());
+    }
+
+    bs_scope.renderer = NULL;
+    bs_scope.subpass = 0;
+}
+
+void bs_runPass(bs_Renderer* renderer, ...) {
+    bs_beginRender(renderer);
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    if (renderer->render_pass) {
+        va_list args;
+        va_start(args, renderer);
+        for (int i = 0; i < renderer->num_subpasses; i++) {
+            bs_Callback callback = va_arg(args, bs_Callback);
+            if (!callback) break;
+            if (i != 0) {
+                bs_scope.subpass = i;
+                vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
+            }
+
+            callback();
+        }
+        va_end(args);
+    }
+    else {
+        va_list args;
+        va_start(args, renderer);
+
+        bs_Callback callback = NULL;
+        while (callback = va_arg(args, bs_Callback))
+            callback();
+
+        va_end(args);
+    }
+    bs_endRender(renderer);
+}
+
+int bs_rendererSwapsCount(bs_Renderer* renderer) {
+    return renderer->flags & BSI_RENDERER_HAS_SWAPS_BIT ? _bs_settings.frames_in_flight : 1;
+}
+
+static void bs_destroyFramebuffer(bs_Renderer* renderer) {
+    int swaps_count = bs_rendererSwapsCount(renderer);
+
+    for (int i = 0; i < swaps_count; i++) {
+        vkDestroyFramebuffer(_bs_instance->device, renderer->_[i].framebuffer, NULL);
+        renderer->_[i].framebuffer = 0;
+    }
+}
+
+void bs_destroyRenderer(bs_Renderer* renderer) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    bs_free(renderer->inputs);
+    bs_free(renderer->outputs);
+
+    vkDestroyRenderPass(_bs_instance->device, renderer->render_pass, NULL);
+    renderer->render_pass = 0;
+
+    bs_destroyFramebuffer(renderer);
+
+    // TODO: make generic
+    int id = renderer->head.id;
+    int source_id = renderer->head.source_id;
+    memset(renderer, 0, sizeof(bs_Renderer));
+    renderer->head.source_id = source_id;
+    renderer->head.id = id;
+}
+
+void bs_resizeRenderer(bs_Renderer* renderer, bs_ivec2 dim) {
+    if (!renderer)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    renderer->dim = dim;
+
+    bs_destroyFramebuffer(renderer);
+    bs_framebuffer(renderer, dim);
+}
+
+
+
+  /*==============================================================================
+   * Computation
+   *============================================================================*/
+
+void bs_dispatchAsync(bs_Pipeline* pipeline, bs_U32 x, bs_U32 y, bs_U32 z) {
+    if (!pipeline)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_INVALID_PARAM);
+
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline->pipeline);
+    vkCmdBindDescriptorSets(
+        command_buffer, 
+        VK_PIPELINE_BIND_POINT_COMPUTE, 
+        pipeline->layout, 
+        0, pipeline->num_bind_sets, _bs_instance->sets, 0, NULL);
+
+    vkCmdDispatch(command_buffer, x, y, z);
+
+    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    }
+}
+
+
+
+  /*==============================================================================
+   * Ray Tracing
+   *============================================================================*/
+
+void bs_rayTrace(bs_RayTracer* ray_tracer, bs_Pipeline* pipeline, bs_U32 width, bs_U32 height, bs_U32 depth) {
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline->pipeline);
+    if (pipeline->num_bind_sets != 0) {
+        vkCmdBindDescriptorSets(
+            command_buffer,
+            VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR,
+            pipeline->layout,
+            0, pipeline->num_bind_sets, _bs_instance->sets, 0, NULL
+        );
+    }
+
+    const int ray_gen_index = 0, miss_index = 1;
+
+    VkDeviceAddress address = bs_bufferAddress(pipeline->binding_table->_->vk_buffer);
+
+    VkStridedDeviceAddressRegionKHR tables[4] = { 0 };
+    int order[4] = { BS_RAY_GEN_SHADER, BS_MISS_SHADER, -1, -1 };
+
+    if (ray_tracer->groups_count > 2)
+        bs_throwBasilisk(BSX_NOT_IMPLEMENTED);
+
+    for (int i = 0; i < ray_tracer->groups_count; i++) {
+        int map = 0;
+        for (; map < 4; map++) {
+            if (ray_tracer->_[i].shader->type == order[map])
+                break;
+        }
+
+        tables[map] = (VkStridedDeviceAddressRegionKHR){
+            .deviceAddress = address + ray_tracer->record_size * i,
+            .size = ray_tracer->record_size,
+            .stride = ray_tracer->record_size,
+        };
+    }
+
+    _bs_procs.vkCmdTraceRaysKHR(command_buffer, tables + 0, tables + 1, tables + 2, tables + 3, width, height, depth);
+}
+
+bs_Object* bs_rayTracer(bs_Object* object, bs_U32 flags, ...) {
+    bs_RayTracer* ray_tracer = object->ray_tracer;
+
+    if (!ray_tracer) return NULL;
+    if (object->flags & BS_OBJECT_ALREADY_EXISTS && !(object->flags & BS_OBJECT_FORCE_DESTROY)) return NULL;
+
+    bs_destroyRayTracer(ray_tracer);
+
+    ray_tracer->aabbs = bs_list(sizeof(VkAabbPositionsKHR), 128);
+    ray_tracer->batches = bs_list(sizeof(bs_Batch*), 16);
+
+    va_list args;
+    va_start(args, flags);
+    for (; va_arg(args, bs_Shader*); ray_tracer->groups_count++) { }
+    va_end(args);
+
+    va_start(args, flags);
+    for (int i = 0; i < ray_tracer->groups_count; i++) {
+        bs_Shader* shader = va_arg(args, bs_Shader*);
+        object->ray_tracer->_[i] = (struct bs_ShaderGroup) {
+            .shader = shader
+        };
+    }
+    va_end(args);
+
+    return object;
+}
+
+void bs_accelerateAabb(bs_RayTracer* tracer, bs_Aabb aabb) {
+    bs_pushBack(&tracer->aabbs, &(VkAabbPositionsKHR) {
+        .minX = aabb.min.x,
+        .minY = aabb.min.y,
+        .minZ = aabb.min.z,
+        .maxX = aabb.max.x,
+        .maxY = aabb.max.y,
+        .maxZ = aabb.max.z,
+    });
+}
+
+void bs_accelerateBatch(bs_RayTracer* tracer, bs_Batch* batch) {
+    bs_pushBack(&tracer->batches, &batch);
+}
+
+void bs_destroyRayTracer(bs_RayTracer* tracer) { // i'm already tracer
+    _bs_procs.vkDestroyAccelerationStructureKHR(_bs_instance->device, tracer->BLAS, NULL);
+    _bs_procs.vkDestroyAccelerationStructureKHR(_bs_instance->device, tracer->TLAS, NULL);
+    tracer->BLAS = tracer->TLAS = NULL;
+
+    memset(tracer, 0, sizeof(bs_RayTracer));
+}
+
+static bs_Result bs_buildBLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
+    bs_Result result;
+
+    bs_stageList(staging_buffer, &tracer->aabbs);
+    bs_Object* aabb_buffer = BS_BUFFER(-1, 0, 0);
+    result = bs_buffer(aabb_buffer->buffer, tracer->aabbs.count * sizeof(VkAabbPositionsKHR),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_nameBuffer(aabb_buffer->buffer, "AABB Buffer");
+    bs_copyAsync(staging_buffer, aabb_buffer->buffer, 0, 0, BS_U32_MAX);
+
+    bsi_fetchCommands();
+
+    bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
+
+    bs_Batch* batch = *(bs_Batch**)bs_fetchUnit(&tracer->batches, 0);
+
+    VkAccelerationStructureGeometryKHR geometry = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR ,
+        .geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR,
+        .geometry.triangles = {
+            .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR,
+            .vertexFormat = VK_FORMAT_R32G32B32_SFLOAT,
+            .vertexData.deviceAddress = bs_bufferAddress(batch->vertex_buffer->buffer->_->vk_buffer),
+            .vertexStride = batch->vertices.unit_size,
+            .indexType = VK_INDEX_TYPE_UINT32,
+            .indexData.deviceAddress = bs_bufferAddress(batch->index_buffer->buffer->_->vk_buffer),
+            .maxVertex = batch->vertices.count - 1,
+            .transformData = { 0 },
+        },
+        .flags = VK_GEOMETRY_OPAQUE_BIT_KHR,
+    };
+
+    VkAccelerationStructureGeometryKHR aabb_geometry = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR ,
+        .geometryType = VK_GEOMETRY_TYPE_AABBS_KHR,
+        .geometry.aabbs = {
+            .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR,
+            .stride = sizeof(VkAabbPositionsKHR),
+            .data.deviceAddress = bs_bufferAddress(aabb_buffer->buffer->_->vk_buffer),
+        },
+        .flags = VK_GEOMETRY_OPAQUE_BIT_KHR,
+    };
+
+    VkAccelerationStructureBuildRangeInfoKHR range_info = {
+        .primitiveCount = batch->indices.count / 3,
+    };
+
+    VkAccelerationStructureBuildRangeInfoKHR aabb_range_info = {
+        .primitiveCount = tracer->aabbs.count,
+    };
+
+    VkAccelerationStructureBuildGeometryInfoKHR build_info = { 
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+        .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+        .geometryCount = 1,
+        .pGeometries = &aabb_geometry,
+        .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+        .srcAccelerationStructure = VK_NULL_HANDLE,
+    };
+
+    VkAccelerationStructureBuildSizesInfoKHR size_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+    _bs_procs.vkGetAccelerationStructureBuildSizesKHR(
+        _bs_instance->device,
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &build_info,
+        &aabb_range_info.primitiveCount,
+        &size_info);
+
+    tracer->BLAS_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    result = bs_buffer(tracer->BLAS_buffer, size_info.accelerationStructureSize,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_nameBuffer(tracer->BLAS_buffer, "BLAS Buffer");
+
+    VkAccelerationStructureCreateInfoKHR createInfo = { 
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        .type = build_info.type,
+        .size = size_info.accelerationStructureSize,
+        .buffer = tracer->BLAS_buffer->_->vk_buffer,
+        .offset = 0,
+    };
+
+    result = bs_convertVulkanResult(_bs_procs.vkCreateAccelerationStructureKHR(_bs_instance->device, &createInfo, NULL, &tracer->BLAS));
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    tracer->BLAS_scratch_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    result = bs_buffer(tracer->BLAS_scratch_buffer, size_info.buildScratchSize,
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_nameBuffer(tracer->BLAS_scratch_buffer, "BLAS Scratch Buffer");
+
+    build_info.dstAccelerationStructure = tracer->BLAS;
+    build_info.scratchData.deviceAddress = bs_bufferAddress(tracer->BLAS_scratch_buffer->_->vk_buffer);
+
+    VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &aabb_range_info;
+
+    _bs_procs.vkCmdBuildAccelerationStructuresKHR(bsi_fetchCommands(), 1, &build_info, &pRangeInfo);
+    bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
+
+    bsi_pushQueue(bs_scope.queue);
+    bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+
+    return BS_RESULT_OK;
+}
+
+static bs_Result bs_buildTLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
+    bs_Result result;
+
+    VkCommandBuffer cmds = bsi_fetchCommands();
+    bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
+
+    VkAccelerationStructureDeviceAddressInfoKHR address_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
+    address_info.accelerationStructure = tracer->BLAS;
+    VkDeviceAddress blasAddress = _bs_procs.vkGetAccelerationStructureDeviceAddressKHR(_bs_instance->device, &address_info);
+
+    VkAccelerationStructureInstanceKHR instance = { 0 };
+    const float rcpSqrt2 = sqrtf(0.5f);
+    instance.transform.matrix[0][0] = -rcpSqrt2;
+    instance.transform.matrix[0][2] = rcpSqrt2;
+    instance.transform.matrix[1][1] = 1.0f;
+    instance.transform.matrix[2][0] = -rcpSqrt2;
+    instance.transform.matrix[2][2] = -rcpSqrt2;
+    instance.instanceCustomIndex = 0;
+    instance.mask = 0xFF;
+    instance.instanceShaderBindingTableRecordOffset = 0;
+    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    instance.accelerationStructureReference = blasAddress;
+
+    VkAccelerationStructureBuildRangeInfoKHR range_info = {
+        .primitiveCount = 1,
+    };
+
+    bs_Buffer* instance_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    result = bs_buffer(instance_buffer, sizeof(instance),
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        BS_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_nameBuffer(instance_buffer, "Instance Buffer");
+    memcpy(staging_buffer->_->data, &instance, sizeof(instance));
+    bs_copyAsync(staging_buffer, instance_buffer, 0, 0, sizeof(instance));
+
+    VkBufferMemoryBarrier barrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = instance_buffer->_->vk_buffer,
+        .offset = 0,
+        .size = VK_WHOLE_SIZE
+    };
+
+    vkCmdPipelineBarrier(
+        bsi_fetchCommands(),
+        VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        0,
+        0, NULL,
+        1, &barrier,
+        0, NULL
+    );
+    VkAccelerationStructureGeometryInstancesDataKHR instancesVk = { 
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
+        .arrayOfPointers = VK_FALSE,
+        .data.deviceAddress = bs_bufferAddress(instance_buffer->_->vk_buffer),
+    };
+
+    VkAccelerationStructureGeometryKHR geometry = { 
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
+        .geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR,
+        .geometry.instances = instancesVk,
+    };
+
+    VkAccelerationStructureBuildGeometryInfoKHR build_info = { 
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+        .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+        .geometryCount = 1,
+        .pGeometries = &geometry,
+        .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+        .srcAccelerationStructure = VK_NULL_HANDLE,
+    };
+
+    VkAccelerationStructureBuildSizesInfoKHR size_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+    _bs_procs.vkGetAccelerationStructureBuildSizesKHR(_bs_instance->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info,
+        &range_info.primitiveCount, &size_info);
+
+    tracer->TLAS_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    result = bs_buffer(tracer->TLAS_buffer, size_info.accelerationStructureSize,
+        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        BS_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_nameBuffer(tracer->TLAS_buffer, "TLAS Buffer");
+
+    VkAccelerationStructureCreateInfoKHR createInfo = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        .type = build_info.type,
+        .size = size_info.accelerationStructureSize,
+        .buffer = tracer->TLAS_buffer->_->vk_buffer,
+        .offset = 0,
+    };
+
+    result = bs_convertVulkanResult(_bs_procs.vkCreateAccelerationStructureKHR(_bs_instance->device, &createInfo, NULL, &tracer->TLAS));
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    build_info.dstAccelerationStructure = tracer->TLAS;
+
+    tracer->TLAS_scratch_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    result = bs_buffer(
+        tracer->TLAS_scratch_buffer, 
+        size_info.buildScratchSize, 
+        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, BS_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    build_info.scratchData.deviceAddress = bs_bufferAddress(tracer->TLAS_scratch_buffer->_->vk_buffer);
+    bs_nameBuffer(tracer->TLAS_scratch_buffer, "TLAS Scratch Buffer");
+
+    VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
+
+    _bs_procs.vkCmdBuildAccelerationStructuresKHR(bsi_fetchCommands(), 1, &build_info, &p_range_info);
+    bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
+
+    bsi_pushQueue(bs_scope.queue);
+    bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+
+    return BS_RESULT_OK;
+}
+
+bs_Result bs_build(bs_RayTracer* tracer) {
+    bs_Buffer* staging_buffer = BS_BUFFER(-1, 0, 0)->buffer;
+    bs_Result result = bs_buffer(staging_buffer, BS_MAX(sizeof(VkAccelerationStructureInstanceKHR), tracer->aabbs.count * sizeof(VkAabbPositionsKHR)),
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        0);
+
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    bs_mapBuffer(staging_buffer, BS_U32_MAX);
+
+    result = bs_buildBLAS(tracer, staging_buffer);
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    result = bs_buildTLAS(tracer, staging_buffer);
+    if (result != BS_RESULT_OK) {
+        bs_destroyRayTracer(tracer);
+        return result;
+    }
+
+    return result;
+}
+
+
+
+  /*==============================================================================
+   * Synchronization
+   *============================================================================*/
+
+void bs_barrier(bs_U32 dependency_flags, bs_U32 src_stage, bs_U32 dst_stage, bs_U32 src_access, bs_U32 dst_access) {
+    VkCommandBuffer command_buffer = bsi_fetchCommands();
+
+    vkCmdPipelineBarrier(
+        command_buffer,
+        src_stage, dst_stage,
+        dependency_flags,
+        1, &(VkMemoryBarrier) {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = src_access,
+            .dstAccessMask = dst_access,
+        },
+        0, NULL, 0, NULL);
+
+    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    }
+}
+
+
+
+  /*==============================================================================
+   * Queues
+   *============================================================================*/
+
+bs_Queue* bs_singleTimesQueue() {
+    return _bs_instance->single_times_queue;
+}
+
+static inline VkQueueFlags bs_convertQueueFlags(bs_QueueBits flags) {
+    return
+        (flags & BS_QUEUE_GRAPHICS_BIT ? VK_QUEUE_GRAPHICS_BIT : 0) |
+        (flags & BS_QUEUE_COMPUTE_BIT ? VK_QUEUE_COMPUTE_BIT : 0) |
+        (flags & BS_QUEUE_TRANSFER_BIT ? VK_QUEUE_TRANSFER_BIT : 0);
+}
+
+bs_U32 bs_queueFamily(bs_QueueBits bs_flags) {
+    VkQueueFlagBits flags = bs_convertQueueFlags(bs_flags);
+
+    bs_U32 num_families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(_bs_instance->physical_device, &num_families, NULL);
+    VkQueueFamilyProperties* queue_families = bs_calloc(num_families, sizeof(VkQueueFamilyProperties));
+    vkGetPhysicalDeviceQueueFamilyProperties(_bs_instance->physical_device, &num_families, queue_families);
+
+    for (bs_U32 i = 0; i < num_families; i++) {
+        if (!(queue_families[i].queueFlags & flags)) continue;
+        if (!(flags & VK_QUEUE_GRAPHICS_BIT)) {
+            bs_free(queue_families);
+            return i;
+        }
+
+        VkBool32 supports_present = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(_bs_instance->physical_device, i, _bs_instance->surface, &supports_present);
+        if (supports_present) {
+            bs_free(queue_families);
+            return i;
+        }
+    }
+
+    bs_free(queue_families);
+    return -1;
+}
+
+int bs_queueSwapsCount(bs_Queue* queue) {
+    return queue->flags & BSI_QUEUE_SWAPS_BIT ? BS_MAX(_bs_settings.frames_in_flight, _bs_settings.buffer_count_min) : 1;
+}
+
+int bs_queueSwap(bs_Queue* queue) {
+    return queue->flags & BSI_QUEUE_SWAPS_BIT ? _bs_swapchain->frame : 0;
+}
+
+bs_Object* bs_queue(bs_Object* object, bs_QueueBits flags) {
+    VkResult result;
+    bs_Queue* queue = object->queue;
+
+    if (!queue) return NULL;
+    if (object->flags & BS_OBJECT_ALREADY_EXISTS && !(object->flags & BS_OBJECT_FORCE_DESTROY)) return NULL;
+
+    bs_destroyQueue(queue);
+
+    if (object->flags & BS_OBJECT_HAS_SWAPS_BIT)
+        flags |= BSI_QUEUE_SWAPS_BIT;
+
+    queue->flags = flags;
+
+    int num_swaps = bs_queueSwapsCount(queue);
+
+    queue->family = bs_queueFamily(flags);
+    vkGetDeviceQueue(_bs_instance->device, queue->family, 0, &queue->queue);
+
+   /**
+    Command Buffers
+    */
+    VkCommandBufferAllocateInfo alloc_i = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = _bs_instance->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = num_swaps,
+    };
+
+    VkCommandBuffer command_buffer_result[3] = { 0 };
+    result = vkAllocateCommandBuffers(_bs_instance->device, &alloc_i, command_buffer_result);
+    if (result != VK_SUCCESS) {
+        bs_throwVulkan(result);
+        return NULL;
+    }
+
+    for (int i = 0; i < num_swaps; i++)
+        queue->_[i].command_buffer = command_buffer_result[i];
+
+    if (flags & BS_QUEUE_SINGLE_TIMES_BIT)
+        return object;
+
+   /**
+    Semaphores / Fences
+    */
+    VkSemaphoreCreateInfo semaphore_ci = {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    };
+
+    VkFenceCreateInfo fence_ci = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+    };
+
+    for (int i = 0; i < num_swaps; i++) {
+        if (!(flags & BS_QUEUE_DONT_SIGNAL)) {
+            result = vkCreateSemaphore(_bs_instance->device, &semaphore_ci, NULL, &object->queue->_[i].semaphore);
+            if (result != VK_SUCCESS) {
+                bs_throwVulkan(result);
+                return NULL;
+            }
+
+        }
+
+        result = vkCreateFence(_bs_instance->device, &fence_ci, NULL, &object->queue->_[i].fence);
+        if (result != VK_SUCCESS) {
+            bs_throwVulkan(result);
+            return NULL;
+        }
+
+        result = vkResetFences(_bs_instance->device, 1, &object->queue->_[i].fence);
+        if (result != VK_SUCCESS) {
+            bs_throwVulkan(result);
+            return NULL;
+        }
+    }
+
+    if (queue->head.id != 0) {
+        const char* name = bs_idName(queue->head.source_id, queue->head.id);
+        _bs_string_builder = bs_stringF(_bs_string_builder, BS_PRINT_COLOR("%s", BS_PRINT_BLUE_BRIGHT), name);
+        bsi_nameHandle(object->queue->queue, VK_OBJECT_TYPE_QUEUE, _bs_string_builder->value);
+
+        for (int i = 0; i < num_swaps; i++) {
+            if (!(flags & BS_QUEUE_DONT_SIGNAL)) {
+                _bs_string_builder = bs_stringF(_bs_string_builder, BS_PRINT_COLOR("semaphore (swap %d) %s", BS_PRINT_BLUE_BRIGHT), i, name);
+                bsi_nameHandle(object->queue->_[i].semaphore, VK_OBJECT_TYPE_SEMAPHORE, _bs_string_builder->value);
+            }
+
+            _bs_string_builder = bs_stringF(_bs_string_builder, BS_PRINT_COLOR("fence (swap %d) %s", BS_PRINT_BLUE_BRIGHT), i, name);
+            bsi_nameHandle(object->queue->_[i].fence, VK_OBJECT_TYPE_FENCE, _bs_string_builder->value);
+        }
+    }
+
+    return object;
+}
+
+void bs_destroyQueue(bs_Queue* queue) {
+    if (!queue)
+        return bs_throwBasilisk(BSX_INVALID_PARAM);
+
+    for (int i = 0; i < bs_queueSwapsCount(queue); i++) {
+        vkFreeCommandBuffers(_bs_instance->device, _bs_instance->command_pool, 1, &queue->_[i].command_buffer);
+        if (queue->_[i].semaphore)
+            vkDestroySemaphore(_bs_instance->device, queue->_[i].semaphore, NULL);
+    }
+
+    // TODO: make generic
+    int id = queue->head.id;
+    int source_id = queue->head.source_id;
+    memset(queue, 0, sizeof(bs_Queue));
+    queue->head.id = id;
+    queue->head.source_id = source_id;
+}
+
+void bs_awaitQueue(bs_Queue* queue, bs_PipelineStage stage) {
+    int swap = bs_queueSwap(queue);
+    bs_scope.wait_semaphores[bs_scope.wait_num] = queue->_[swap].semaphore;
+    bs_scope.wait_stages[bs_scope.wait_num] = (VkPipelineStageFlags)stage;
+    bs_scope.wait_num++;
+}
+
+void bs_awaitAcquisition() {
+    bs_scope.wait_semaphores[bs_scope.wait_num] = _bs_swapchain->_[_bs_swapchain->frame].semaphore;
+    bs_scope.wait_stages[bs_scope.wait_num] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    bs_scope.wait_num++;
+}
+
+void bs_stallQueue(bs_Queue* queue) {
+    vkQueueWaitIdle(queue->queue);
+}
+
+void bs_stallGPU() {
+    vkDeviceWaitIdle(_bs_instance->device);
+}
+
+bool bs_stall(bs_Queue* queue) {
+    int swap = bs_queueSwap(queue);
+    VkResult result = vkWaitForFences(_bs_instance->device, 1, &queue->_[swap].fence, VK_TRUE, BS_TIMEOUT);
+    bs_throwVulkan(result);
+    
+    if (result != VK_SUCCESS)
+        return false;
+
+    bs_throwVulkan(vkResetFences(_bs_instance->device, 1, &queue->_[swap].fence));
+
+    return true;
+}
+
+bool bs_poll(bs_Queue* queue) {
+    int swap = bs_queueSwap(queue);
+    VkResult res = vkGetFenceStatus(_bs_instance->device, queue->_[swap].fence);
+
+    if (res == VK_SUCCESS) {
+        bs_throwVulkan(vkResetFences(_bs_instance->device, 1, &queue->_[swap].fence));
+        return true;
+    }
+    //else if (res == VK_NOT_READY)
+    return false;
+}
+
+void bsi_resetQueue(bs_Queue* queue) {
+    bs_scope.queue = queue;
+
+    if (bs_scope.has_begun) {
+        bs_throwBasilisk(BSX_GENERAL);
+        return;
+    }
+
+    int swap = bs_queueSwap(queue);
+    VkCommandBuffer command_buffer = queue->_[swap].command_buffer;
+    VkCommandBufferBeginInfo ci = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = queue->flags & BS_QUEUE_SINGLE_TIMES_BIT ? VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT : 0,
+    };
+
+    bs_throwVulkan(vkResetCommandBuffer(command_buffer, 0));
+    bs_throwVulkan(vkBeginCommandBuffer(command_buffer, &ci));
+
+    bs_scope.has_begun = true;
+}
+
+void bsi_pushQueue(bs_Queue* queue) {
+    assert(bs_scope.has_begun);
+    if (!bs_scope.has_begun)
+        bs_throwBasilisk(BSX_GENERAL);
+
+    int swap = bs_queueSwap(queue);
+    VkCommandBuffer command_buffer = queue->_[swap].command_buffer;
+    bs_throwVulkan(vkEndCommandBuffer(command_buffer));
+
+    VkSubmitInfo submit_i = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .signalSemaphoreCount = queue->_[swap].semaphore ? 1 : 0,
+        .pSignalSemaphores = &queue->_[swap].semaphore,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &command_buffer,
+        .waitSemaphoreCount = bs_scope.wait_num,
+        .pWaitDstStageMask = bs_scope.wait_stages,
+        .pWaitSemaphores = bs_scope.wait_semaphores
+    };
+
+    bs_throwVulkan(vkQueueSubmit(queue->queue, 1, &submit_i, queue->_->fence ? queue->_[swap].fence : NULL));
+    bs_scope.has_begun = false;
+}
+
+void bs_enqueue(bs_Queue* queue, bs_Callback function) {
+    bsi_resetQueue(queue);
+    if (function)
+        function();
+    bsi_pushQueue(queue);
+    bs_setScope(&(bs_Scope) { 0 });
+}
+
+bs_Scope bs_enterSingle() {
+    bs_Scope backup = bs_scope;
+    bs_scope = (bs_Scope){
+        .queue = _bs_instance->single_times_queue
+    };
+    return backup;
+}
+
+bs_Scope* bs_getScope() {
+    return &bs_scope;
+}
+
+void bs_setScope(bs_Scope* scope) {
+    if (scope)
+        bs_scope = *scope;
+    else
+        memset(&bs_scope, 0, sizeof(bs_Scope));
+}
+
+void bs_leaveSingle(bs_Scope* backup) {
+    bs_scope = *backup;
+}
+
+void bs_runSingle(void (*f)()) {
+    bs_Scope backup = bs_enterSingle();
+    if (f) f();
+    bs_leaveSingle(&backup);
+}
+
+
+
+  /*==============================================================================
+   * Swapchain / Presentation
+   *============================================================================*/
+
+bs_Image* bs_swapchainImage() {
+    return _bs_swapchain->image->image;
+}
+
+int bs_imageIndex() {
+    return bs_image_index;
+}
+
+void bs_prepareSwapchain();
+void bs_destroySwapchain() {
+    for (int i = 0; i < _bs_settings.frames_in_flight; i++) {
+        vkDestroyImageView(_bs_instance->device, _bs_swapchain->image->image->_[i].view, NULL);
+        _bs_swapchain->image->image->_[i].view = 0;
+    }
+
+    vkDestroySwapchainKHR(_bs_instance->device, _bs_swapchain->swapchain, NULL);
+    _bs_swapchain->swapchain = 0;
+}
+
+void bs_resizeSwapchain() {
+    // glfwGetFramebufferSize(bs_instance->glfw, &bs_swapchain->image.image->dim.x, &bs_swapchain->image.image->dim.y);
+    //
+    // while (bs_swapchain->image.image->dim.x == 0 || bs_swapchain->image.image->dim.y == 0) {
+    //     if (glfwWindowShouldClose(bs_instance->glfw)) return;
+    //
+    //     glfwGetFramebufferSize(bs_instance->glfw, &bs_swapchain->image.image->dim.x, &bs_swapchain->image.image->dim.y);
+    //     glfwWaitEvents();
+    // }
+
+    bs_throwVulkan(vkDeviceWaitIdle(_bs_instance->device));
+
+    bs_destroySwapchain();
+    bs_prepareSwapchain();
+}
+
+// these functions should probably not be called by user
+void bs_acquire() {
+    if (_bs_swapchain->image_acquired) return;
+
+    VkResult result = vkAcquireNextImageKHR(
+        _bs_instance->device,
+        _bs_swapchain->swapchain,
+        BS_U64_MAX,
+        _bs_swapchain->_[_bs_swapchain->frame].semaphore,
+        VK_NULL_HANDLE,
+        &bs_image_index);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        bs_resizeSwapchain();
+        if (_bs_wnd.resize)
+            _bs_wnd.resize();
+        return;
+    }
+    else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+        bs_throwBasilisk(BSXI_INTERNAL | BSX_FAILED_TO_ACQUIRE);
+}
+
+/*
+static void bs_rebindImage(bs_Object object) {
+    for (bs_U32 i = 0; i < BS_MAX_NUM_BIND_SETS; i++) {
+        bs_BindSet* bind_set = bs_queryBindSet(i);
+
+        for (bs_U32 j = 0; j < bind_set->bindings.count; j++) {
+            bs_Binding* binding = bs_queryBinding(bind_set, j);
+            if (!binding || binding->object.image) continue;
+            if (binding->object.image == object.image)
+                bs_throwBasilisk(BSXI_INTERNAL | BSX_NOT_IMPLEMENTED); // todo
+        }
+    }
+}
+
+static void bs_resizeImages() {
+    for (int i = bs_first(BS_IMAGE); i <= bs_last(BS_IMAGE); i++) {
+        bs_Object object = bs_fetchNull(i);
+        if (!object.image) continue;
+
+        if (object.image->flags & BS_IMAGE_AUTO_RESIZE_BIT) {
+            bs_resizeImage(object.image, bs_resolution(), object.image->num_indices);
+            bs_rebindImage(object);
+        }
+    }
+}
+
+static void bs_resizeRenderers() {
+    for (int i = bs_first(BS_RENDERER); i <= bs_last(BS_RENDERER); i++) {
+        bs_Renderer* renderer = bs_fetchNull(i)->renderer;
+        if (renderer && renderer->flags & BS_RENDERER_AUTO_RESIZE_BIT)
+            bs_resizeRenderer(renderer, bs_resolution());
+    }
+}
+
+void bsi_resizeObjects() {
+    bs_swapchain->resized = false;
+    bs_resizeSwapchain();
+    bs_resizeImages();
+    bs_pushDescriptors();
+    bs_resizeRenderers();
+
+    if (bs_instance->resize) bs_instance->resize();
+}
+*/
+
+void bs_present(bs_Queue* queue, ...) {
+    VkSemaphore wait_semaphores[BS_MAX_NUM_WAITS];
+    bs_U32 num_wait_semaphores = 0;
+
+    va_list args;
+    va_start(args, queue);
+    while (1) {
+        bs_Queue* wait_queue = va_arg(args, bs_Queue*);
+        if (!wait_queue) break;
+        int swap = bs_queueSwap(queue);
+        wait_semaphores[num_wait_semaphores++] = wait_queue->_[swap].semaphore;
+    }
+    va_end(args);
+
+    VkPresentInfoKHR present_i = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = num_wait_semaphores,
+        .pWaitSemaphores = wait_semaphores,
+        .swapchainCount = 1,
+        .pSwapchains = &_bs_swapchain->swapchain,
+        .pImageIndices = &bs_image_index,
+    };
+
+    VkResult result = vkQueuePresentKHR(queue->queue, &present_i);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+        bs_throwBasiliskF(BSXI_INTERNAL | BSX_NOT_IMPLEMENTED, "Window was resized");
+    else if (result != VK_SUCCESS)
+        bs_throwVulkan(result);
+
+    _bs_swapchain->frame = (_bs_swapchain->frame + 1) % _bs_settings.frames_in_flight;
+    _bs_swapchain->image_acquired = false;
+}

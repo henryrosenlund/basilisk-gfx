@@ -1,32 +1,18 @@
 cmake_minimum_required(VERSION 3.23.2)
+project(woc)
 
-project(basilisk)
-set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(${PROJECT_NAME}
-    src/bs_wnd.c
-    src/bs_mem.c
-    src/bs_ttf.c
-    src/bs_core.c
-    src/bs_math.c
-    src/bs_debug.c
-    src/bs_models.c
-    src/bs_shaders.c
-    src/bs_textures.c
+set(BS_APP_NAME ${PROJECT_NAME})
 
-    external/glad/glad.c
-    external/lodepng/lodepng.c
-)
+add_subdirectory(basilisk-core/)
+add_subdirectory(basilisk-gen/)
+add_subdirectory(basilisk-gfx/)
+add_subdirectory(basilisk-mod/)
+add_subdirectory(basilisk-steam/)
+add_subdirectory(basilisk-test/)
+add_subdirectory(basilisk-test-runner/)
 
-include_directories(${PROJECT_NAME}
-    include/
-    include/gl
-    include/basilisk
-    external/
-    external/lodepng
-)    
-  
-link_directories(${PROJECT_NAME}
-    lib
-    external/cglm
-)
+add_subdirectory(external/SPIRV-Cross/)
+add_subdirectory(external/glslang/)

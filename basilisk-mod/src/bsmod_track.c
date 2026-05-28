@@ -1,0 +1,626 @@
+#include <bsgfx.h>
+#include <bsmod_compile.h>
+#include <bsmod_bmfont.h>
+#include <bsmod_bpak.h>
+#include <bsmod_track.h>
+#include <bsmod_biff.h>
+#include <bsmod_atlas.h>
+#include <bsmod.h>
+#include <bs_json.h>
+#include <bs_window.h>
+#include <direct.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+
+static bs_List bsmod_string_pool = { .unit_size = sizeof(bs_StringPoolEntry), .increment = 64 };
+
+struct bsmod_Hook {
+	char* path;
+	char* function;
+	char* package;
+	char* prefix;
+	bool call_once;
+	bs_DateTime last_modified;
+	bs_List entries;
+};
+
+// todo make this reloadable
+static bs_List* bsmod_loadHooks() {
+	static bs_List hooks = { .unit_size = sizeof(struct bsmod_Hook), .increment = 16 };
+	if (hooks.capacity)
+		return &hooks;
+
+	bs_Json json = bs_loadJson(BSMOD_HOOKS_PATH);
+	bs_JsonValue value = bs_fetchJson(&json, BS_JSON_ARRAY, "$");
+
+	//static bs_String* last_modified;
+
+	for (int i = 0; i < value.size; i++) {
+		bs_Json root = bs_jsonRoot(&json, value.as_array.as_objects[i]);
+
+		//last_modified = bs_stringF(last_modified, "%02d-%02d-%02d %02d:%02d:%02d", m.years, m.months, m.days, m.hours, m.minutes, m.seconds);
+
+		char* prefix = bs_fetchJsonF(&root, BS_JSON_UNDEFINED, "prefix").as_string;
+		struct bsmod_Hook dir = {
+			.path = strdup(bs_fetchJson(&root, BS_JSON_STRING, "path").as_string),
+			.function = strdup(bs_fetchJson(&root, BS_JSON_STRING, "function").as_string),
+			.package = strdup(bs_fetchJson(&root, BS_JSON_STRING, "package").as_string),
+			.call_once = bs_fetchJson(&root, BS_JSON_UNDEFINED, "callOnce").as_bool,
+			.prefix = prefix ? strdup(prefix) : "",
+			.entries = bs_list(sizeof(char*), 16),
+		};
+
+		bs_JsonValue entries = bs_fetchJsonF(&root, BS_JSON_UNDEFINED, "entries");
+		for (int i = 0; i < entries.size; i++) {
+			char* string = entries.as_array.as_strings[i];
+			string = bs_checkStringPool(&bsmod_string_pool, string);
+			bs_pushBack(&dir.entries, &string);
+		}
+
+		bs_JsonValue last_modified = bs_fetchJsonF(&root, BS_JSON_UNDEFINED, "lastModified");
+		if (last_modified.found && last_modified.type == BS_JSON_STRING) {
+			sscanf(last_modified.as_string, "%u-%u-%u %u:%u:%u",
+				&dir.last_modified.years, &dir.last_modified.months, &dir.last_modified.days,
+				&dir.last_modified.hours, &dir.last_modified.minutes, &dir.last_modified.seconds);
+		}
+
+		bs_pushBack(&hooks, &dir);
+	}
+
+	bs_destroyJson(&json);
+
+	return &hooks;
+}
+
+static void bsmod_saveHooks(bs_List* hooks) {
+	bs_Json json = bs_emptyJson();
+	bs_ensureJsonMutable(&json);
+
+	for (int i = 0; i < hooks->count; i++) {
+		struct bsmod_Hook* dir = bs_fetchUnit(hooks, i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->path), "$[%d].path", i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->function), "$[%d].function", i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->package), "$[%d].package", i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->prefix), "$[%d].prefix", i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->call_once), "$[%d].callOnce", i);
+		bs_ensureJsonF(&json, bs_jsonValue(dir->last_modified), "$[%d].lastModified", i);
+
+		bs_JsonValue entries = bs_jsonArray(BS_JSON_STRING, dir->entries.data, dir->entries.count);
+		bs_ensureJsonF(&json, entries, "$[%d].entries", i);
+	}
+
+	char* data = bs_saveJson(&json, BS_JSON_PRETTY);
+	bs_saveFile(BSMOD_HOOKS_PATH, data, strlen(data));
+	bs_free(data);
+	bs_destroyJson(&json);
+}
+
+
+
+  /*==============================================================================
+   * Hooks
+   * Definition needs BSMODAPI
+   *============================================================================*/
+
+void bsmod_packBindings() {
+	int descriptors_count = 0;
+	int bindings_count = 0;
+	int bind_sets_count = 0;
+
+	bool processed_bind_sets[BS_MAX_NUM_BIND_SETS] = { 0 };
+
+	bs_foreachJson(&bsmod.bindings_json, e) {
+		if (e.value.type != BS_JSON_OBJECT)
+			continue;
+
+		bs_Json root = bs_jsonRoot(&bsmod.bindings_json, e.value.as_object);
+
+		descriptors_count += bs_fetchJson(&root, BS_JSON_UNDEFINED, "count").as_number;
+		int bind_set = bs_fetchJson(&root, BS_JSON_UNDEFINED, "set").as_number;
+		assert(bind_set >= 0 && bind_set < BS_MAX_NUM_BIND_SETS);
+		if (!processed_bind_sets[bind_set])
+			bind_sets_count++;
+		processed_bind_sets[bind_set] = true;
+		bindings_count++;
+	};
+
+	bs_ensureJson(&bsmod.bindings_json, bs_jsonValue(bindings_count), "bindingsCount");
+	bs_ensureJson(&bsmod.bindings_json, bs_jsonValue(bind_sets_count), "bindSetsCount");
+	bs_ensureJson(&bsmod.bindings_json, bs_jsonValue(descriptors_count), "descriptorsCount");
+
+	char* raw = bs_saveJson(&bsmod.bindings_json, BS_JSON_PRETTY);
+	bsmod_packResource(BS_RESOURCE_BINARY, raw, strlen(raw), BSGFX_CONTENT_PATH, "bindings");
+	bs_free(raw);
+}
+
+void bsmod_onConvertBMFont(bsmod_TrackParams params) {
+	if (!bs_fileExists(params.path))
+		return bs_warnF(BS_PRINT_COLOR("Removed %s\n", BS_PRINT_RED), params.path);
+
+	char* ext = bs_fileExtension(params.path);
+	char* png_path = NULL;
+	char* fnt_path = NULL;
+
+	// both .png and .fnt file can trigger this function
+	ext[-1] = '\0';
+	static bs_String* formatted;
+	if (strcmp(ext, "png") == 0) {
+		formatted = bs_stringF(formatted, "%s.fnt", params.path);
+		png_path = params.path;
+		fnt_path = formatted->value;
+	}
+	else if(strcmp(ext, "fnt") == 0) {
+		formatted = bs_stringF(formatted, "%s.png", params.path);
+		fnt_path = params.path;
+		png_path = formatted->value;
+	}
+	else {
+		ext[-1] = '.';
+		return;
+	}
+
+	char* name = bs_fileName(params.path);
+	int name_length = strlen(name);
+	ext[-1] = '.';
+	bsmod_packBMFont(params.package, fnt_path, png_path, "%s%.*s", params.prefix, name_length, name);
+}
+
+#define STB_RECT_PACK_IMPLEMENTATION
+#include <stb_rect_pack.h>
+
+void bsmod_onLoadTTF(bsmod_TrackParams params) {
+	if (!bs_fileExists(params.path))
+		return bs_warnF(BS_PRINT_COLOR("Removed %s\n", BS_PRINT_RED), params.path);
+
+	printf("Loading ttf \"%s\"\n", params.path);
+
+   /**
+    Load TTF
+    */
+	// bs_TTF* ttf = bs_query(path, BS_QUERY_FORCE_CREATE).ttf;
+
+	const char* alphabet = BSGFX_ALPHABET_DEFAULT;
+	int alphabet_length = sizeof(BSGFX_ALPHABET_DEFAULT) - 1;
+	bs_TTF ttf = { 0 };
+	bs_ttf(&ttf, params.path, 0);
+	for (int i = 0; i < alphabet_length; i++) {
+		bs_glyph(&ttf, alphabet[i]);
+	}
+	bs_kern(&ttf);
+
+   /**
+    Rasterize
+    */
+	stbrp_rect* rects = _alloca(ttf.glyphs.count * sizeof(stbrp_rect));
+
+	const float scale = 0.05;
+	int atlas_width = 2048;
+	int atlas_height = 2048;
+	const int max_atlas_width = 2048;
+	const int padding = 4;
+
+	int max_width = 0, max_height = 0;
+	for (int i = 0; i < ttf.glyphs.count; i++) {
+		bs_Glyph* glyph = bs_fetchUnit(&ttf.glyphs, i);
+		glyph->width = (float)(glyph->x_max * scale - glyph->x_min * scale);
+		glyph->height = (float)(glyph->y_max * scale - glyph->y_min * scale);
+
+		max_width = BS_MAX(max_width, glyph->width);
+		max_height = BS_MAX(max_height, glyph->height);
+
+		rects[i] = (stbrp_rect){
+			.id = i,
+			.w = glyph->width + padding,
+			.h = glyph->height + padding,
+		};
+	}
+	char* bmp = malloc(max_width * max_height);
+
+	stbrp_context ctx;
+	stbrp_node* nodes = _alloca(atlas_width * sizeof(stbrp_node));
+
+	stbrp_init_target(&ctx, atlas_width, atlas_height, nodes, atlas_width);
+	stbrp_pack_rects(&ctx, rects, ttf.glyphs.count);
+
+	char* atlas = bs_calloc(1, atlas_width * atlas_height);
+
+	for (int i = 0; i < ttf.glyphs.count; i++) {
+		memset(bmp, 0, max_width * max_height);
+
+		bs_Glyph* glyph = bs_fetchUnit(&ttf.glyphs, i);
+		bs_rasterizeGlyph(&ttf, glyph, atlas_width, atlas_height, bmp, scale);
+
+		for (int y = 0; y < glyph->height; y++) {
+			int src_y = glyph->height - 1 - y;
+
+			memcpy(
+				atlas + (rects[i].x + padding) +
+				(rects[i].y + padding + y) * atlas_width,
+				bmp + src_y * glyph->width,
+				glyph->width
+			);
+		}
+	}
+
+	char* file_name = bs_fileName(params.path);
+	//bs_savePngF(atlas, bs_iv2(atlas_width, atlas_height), BS_PNG_GREY, "resources/atlas/%s.png", file_name);
+
+   /**
+    Create JSON
+    */
+	bs_Json json = bs_emptyJson();
+	bs_ensureJsonMutable(&json);
+
+	bs_ensureJson(&json, bs_jsonValue(ttf.head.units_per_em), "unitsPerEm");
+	bs_ensureJson(&json, bs_jsonValue(scale), "scale");
+
+	for (int i = 0; i < ttf.kerning_pairs.count; i++) {
+		bs_KerningPair* pair = bs_fetchUnit(&ttf.kerning_pairs, i);
+
+		bs_ensureJsonF(&json, bs_jsonValue(pair->right_index), "kerningPairs[%d].right", i);
+		bs_ensureJsonF(&json, bs_jsonValue(((float)pair->value) * scale), "kerningPairs[%d].value", i);
+	}
+
+	for (int i = 0; i < ttf.glyphs.count; i++) {
+		bs_Glyph* glyph = bs_fetchUnit(&ttf.glyphs, i);
+		int code = glyph->code;
+
+		int color[4] = { 255, 255, 255, 255 };
+		bs_ensureJsonF(&json, bs_jsonValue(rects[i].x + padding), "table.%d.x", code);
+		bs_ensureJsonF(&json, bs_jsonValue(rects[i].y + padding), "table.%d.y", code);
+		bs_ensureJsonF(&json, bs_jsonValue(glyph->width), "table.%d.w", code);
+		bs_ensureJsonF(&json, bs_jsonValue(glyph->height), "table.%d.h", code);
+		bs_ensureJsonF(&json, bs_jsonValue((int)((float)glyph->y_min * scale)), "table.%d.y_shift", code);
+		bs_ensureJsonF(&json, bs_jsonArray(BS_JSON_NUMBER_INTEGER, color, 4), "table.%d.color", code);
+		//bs_ensureJsonF(&json, bs_jsonValue(false), "%d.hasAlpha", code);
+		//bs_ensureJsonF(&json, bs_jsonValue(false), "%d.isSolid", code);
+		bs_ensureJsonF(&json, bs_jsonValue((float)glyph->long_hor_metric.advance_width * scale), "table.%d.advanceWidth", code);
+		bs_ensureJsonF(&json, bs_jsonValue((float)glyph->long_hor_metric.left_side_bearing * scale), "table.%d.leftSideBearing", code);
+		bs_ensureJsonF(&json, bs_jsonValue(glyph->pairs_offset), "table.%d.kerningPairOffset", code);
+		bs_ensureJsonF(&json, bs_jsonValue(glyph->pairs_count), "table.%d.kerningPairCount", code);
+	}
+
+	char* raw = bs_saveJson(&json, 0);
+	bsmod_packResourceF(BS_RESOURCE_BINARY, raw, strlen(raw), params.package, "atlas/%s.json", file_name);
+
+	bs_free(raw);
+	bs_destroyJson(&json);
+
+	//if (_bsmod_procs.bsgfx_loadFonts && bs_instance()->instance)
+	//	_bsmod_procs.bsgfx_loadFonts();
+}
+
+static void bsmod_onPackAtlasTexture(bs_FileInfo info, bsmod_AtlasPacker* packer) {
+	char* name = bs_fileName(info.path);
+	char* ext = bs_fileExtension(name);
+
+	int width = 0, height = 0;
+	size_t size = 0;
+	unsigned char* bmp = bs_loadPng(info.path, &width, &height, 4);
+
+	ext[-1] = '\0';
+	bsmod_packAtlasTexture(packer, name, bmp, width, height, 0);
+	ext[-1] = '.';
+}
+
+void bsmod_onPackAtlas(bsmod_TrackParams params) {
+	bsmod_AtlasPacker packer = bsmod_createAtlasPacker();
+
+	char* file_name = bs_fileName(params.path);
+	char* extension = bs_fileExtension(params.path);
+
+	file_name[-1] = '\0';
+	char* directory_name = bs_fileName(params.path); // hacky
+	bs_foreachFile(bsmod_onPackAtlasTexture, &packer, params.path);
+
+	extension[-1] = '\0';
+	bsmod_packAtlas(&packer, 1024, 1024, params.package, directory_name);
+	extension[-1] = '.';
+	file_name[-1] = '/';
+}
+
+void bsmod_onPackModels(bsmod_TrackParams params) {
+	bs_String* glb = NULL;
+
+	char* ext = bs_fileExtension(params.path);
+	char* name = bs_fileName(params.path);
+	if (strcmp(ext, "gltf") == 0) {
+		bs_infoF("Converting \"%s\" to glb\n", params.path);
+		bs_String* gltf = bs_loadFile(params.path);
+		gltf->len--;
+		bs_Json json = bs_json(gltf->value, gltf->len);
+		char* uri = bs_fetchJson(&json, BS_JSON_STRING, "buffers[0].uri").as_string;
+
+		char* file_name = bs_fileName(params.path);
+		char* directory = "";
+
+		if (file_name != params.path) {
+			directory = params.path;
+			file_name[-1] = '\0';
+		}
+
+		bs_String* bin = bs_loadFileF("%s/%s", directory, uri);
+
+		if (file_name != params.path)
+			file_name[-1] = '/';
+
+		struct {
+			bs_U32 length;
+			bs_U32 type;
+			bs_String* data;
+		} chunks[] = {
+			{
+				.type = 0x4E4F534A,
+				.length = gltf->len,
+				.data = gltf,
+			},
+			{
+				.type = 0x004E4942,
+				.length = bin->len,
+				.data = bin,
+			}
+		};
+		const int chunk_size = sizeof(bs_U32) * 2;
+		const int chunks_count = 2;
+
+		struct {
+			bs_U32 magic;
+			bs_U32 version;
+			bs_U32 length;
+		} header = {
+			.magic = 0x46546C67,
+			.length = sizeof(header),
+		};
+
+		for (int i = 0; i < chunks_count; i++)
+			header.length += chunks[i].length + chunk_size;
+
+		glb = bs_stringAlloc(glb, header.length);
+
+		char* offset = glb->value;
+		memcpy(offset, &header, sizeof(header));
+		offset += sizeof(header);
+
+		for (int i = 0; i < chunks_count; i++) {
+			memcpy(offset, chunks + i, chunk_size);
+			offset += chunk_size;
+			memcpy(offset, chunks[i].data->value, chunks[i].length);
+			offset += chunks[i].length;
+		}
+
+		glb->len = header.length;
+
+		bs_free(gltf);
+		bs_free(bin);
+		bs_destroyJson(&json);
+	}
+	else if (!strcmp(ext, "glb") == 0)
+		return bs_warnF("Unknown model format \"%s\"\n", params.path);
+	else
+		glb = bs_loadFile(params.path);
+
+	bsmod_packResourceF(BS_RESOURCE_MODEL, glb->value, glb->len, params.package, "models/%.*s", strlen(name) - strlen(ext) - 1, name);
+
+	bs_free(glb);
+}
+
+void bsmod_onPackBinary(bsmod_TrackParams params) {
+	bs_String* data = bs_loadFile(params.path);
+
+	char* ext = bs_fileExtension(params.path);
+	ext[-1] = '\0';
+	bsmod_packResourceF(BS_RESOURCE_BINARY, data->value, data->len, params.package, "%s%s", params.prefix, bs_fileName(params.path));
+	ext[-1] = '.';
+
+	bs_free(data);
+}
+
+void bsmod_onPackTextureArray(bsmod_TrackParams params) {
+	char* file_name = bs_fileName(params.path);
+
+	file_name[-1] = '\0';
+	bsmod_packImageDirectory(params.path, params.package, params.prefix); // TODO: prefix will change to name prolly
+	file_name[-1] = '/';
+}
+
+
+
+  /*==============================================================================
+   * Tracker
+   *============================================================================*/
+
+static void bsmod_findLastModifiedFile(bs_FileInfo info, struct { bs_DateTime original_date; bs_DateTime date; const bs_List* added_entries; bs_List* changed_entries; bs_List* entries; }*result) {
+	bs_except(BSX_NOT_FOUND);
+	bs_DateTime date_time = bs_fileModifiedDate(info.path);
+	if (bs_except(0))
+		return;
+
+	char* cached = bs_checkStringPool(&bsmod_string_pool, info.path);
+	bs_pushBack(result->entries, &cached);
+
+	if (bs_isLaterThan(&date_time, &result->original_date)) {
+		if (bs_isLaterThan(&date_time, &result->date)) {
+			result->date = date_time;
+		}
+
+		bs_pushBack(result->changed_entries, &cached);
+	}
+}
+
+static void bsmod_findLastModifiedDirectory(bs_FileInfo info, struct { bs_DateTime date; const bs_List* added_entries; bs_List* changed_entries; bs_List* entries; }*result) {
+	bs_foreachFile(bsmod_findLastModifiedFile, result, info.path);
+}
+
+static void bsmod_trackDirectoryDifferences(const bs_List* changed, const bs_List* a, const bs_List* b, bs_List* out_differences) {
+	for (int i = 0; i < a->count; i++) {
+		char* new_entry = *(char**)bs_fetchUnitUnsafe(a, i);
+
+		bool found = false;
+		for (int j = 0; j < b->count; j++) {
+			char* old_entry = *(char**)bs_fetchUnitUnsafe(b, j);
+
+			if (new_entry == old_entry) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found && !bs_listContains(changed, &new_entry))
+			bs_pushBack(out_differences, &new_entry);
+	}
+}
+
+static bool bsmod_isFile(const char* path) {
+	char* dot = strrchr(path, '.');
+	if (!dot || dot == path || dot[1] == '/' || dot[1] == '\\') {
+		return false;
+	}
+	return true;
+}
+
+void bsmod_onTrack() {
+	static bs_String* last;
+	bs_String* cwd = bs_workingDirectory();
+	last = bs_string(last, cwd->value, cwd->len);
+
+	//static float timer = 1.0;
+	//timer += bs_deltaTime();
+	//if (timer < 1.0)
+	//	return;
+	//else
+	//	timer = 0.0;
+
+	bs_infoF(BS_PRINT_COLOR("track\n", BS_PRINT_RED));
+
+	bs_List* hooks = bsmod_loadHooks();
+
+	static bool reload_all = false; // temp
+	for (int i = 0; i < hooks->count; i++) {
+		struct bsmod_Hook* dir = bs_fetchUnit(hooks, i);
+
+		if (reload_all)
+			bs_logSectionF("Directory \"%s\"", dir->path);
+		if (bsmod_isFile(dir->path)) {
+			bs_DateTime last_modified = bs_fileModifiedDate(dir->path);
+			if (reload_all || bs_isLaterThan(&last_modified, &dir->last_modified)) {
+				dir->last_modified = last_modified;
+
+				PFN_void function = GetProcAddress(bsgfx_bsmodDll(), dir->function);
+				if (function) {
+					function((bsmod_TrackParams) {
+						.path = dir->path,
+						.prefix = dir->prefix,
+						.package = dir->package,
+						.compile_references = true,
+					});
+				}
+
+				bsmod_saveHooks(hooks);
+			}
+		}
+		else {
+			static bs_List changed_entries = { .unit_size = sizeof(char*), .increment = 16 };
+			static bs_List entries = { .unit_size = sizeof(char*), .increment = 16 };
+			static bs_List added_entries = { .unit_size = sizeof(char*), .increment = 4 };
+			static bs_List removed_entries = { .unit_size = sizeof(char*), .increment = 4 };
+
+			changed_entries.count = entries.count = added_entries.count = removed_entries.count = 0;
+			struct {
+				bs_DateTime original_date;
+				bs_DateTime date;
+				const bs_List* added_entries;
+				bs_List* changed_entries;
+				bs_List* entries;
+			} result = {
+				.original_date = dir->last_modified,
+				.date = dir->last_modified,
+				.added_entries = &added_entries,
+				.changed_entries = &changed_entries,
+				.entries = &entries,
+			};
+
+			bs_foreachFile(bsmod_findLastModifiedFile, &result, dir->path);
+			bs_foreachDirectory(bsmod_findLastModifiedDirectory, &result, dir->path); // TODO: this blows up the stack
+			bsmod_trackDirectoryDifferences(&changed_entries, result.entries, &dir->entries, &added_entries);
+			bsmod_trackDirectoryDifferences(&changed_entries, &dir->entries, result.entries, &removed_entries);
+
+			bool later = bs_isLaterThan(&result.date, &dir->last_modified);
+			bool changed = added_entries.count > 0 || removed_entries.count > 0;
+
+			// TODO: this code is getting pretty ugly
+
+			if (reload_all) {
+				PFN_void function = GetProcAddress(bsgfx_bsmodDll(), dir->function); // todo not pfn void
+				if (function) {
+					int count = dir->call_once ? bs_iclamp(result.entries->count, 0, 1) : result.entries->count;
+
+					for (int j = 0; j < count; j++) {
+						char* path = *(char**)bs_fetchUnit(result.entries, j);
+						function((bsmod_TrackParams) {
+							.package = dir->package,
+							.path = path,
+							.prefix = dir->prefix,
+							.compile_references = false,
+						});
+					}
+				}
+			} else if (later || changed) {
+				dir->last_modified = result.date;
+				// dir->entries = result.entries->count;
+
+				PFN_void function = GetProcAddress(bsgfx_bsmodDll(), dir->function); // todo not pfn void
+				if (function) {
+					int count = dir->call_once ? bs_iclamp(result.changed_entries->count, 0, 1) : result.changed_entries->count;
+
+					for (int j = 0; j < count; j++) {
+						char* path = *(char**)bs_fetchUnit(result.changed_entries, j);
+						function((bsmod_TrackParams) {
+							.package = dir->package,
+							.path = path,
+							.prefix = dir->prefix,
+							.compile_references = true,
+						});
+					}
+				}
+				else
+					bs_warnF("Changes found in \"%s\", but callback function \"%s\" does not exist!\n", dir->path, dir->function);
+
+				if (changed && function) {
+					bsmod_TrackParams params = {
+						.package = dir->package,
+						.prefix = dir->prefix,
+						.compile_references = true,
+					};
+
+					int added_count = added_entries.count, removed_count = removed_entries.count;
+					if (dir->call_once) {
+						added_count = bs_iclamp(added_count, 0, 1);
+						removed_count = added_count > 0 ? 0 : bs_iclamp(removed_count, 0, 1);
+					}
+
+					for (int j = 0; j < added_count; j++) {
+						params.path = *(char**)bs_fetchUnitUnsafe(&added_entries, j);
+						function(params);
+					}
+
+					for (int j = 0; j < removed_count; j++) {
+						params.path = *(char**)bs_fetchUnitUnsafe(&removed_entries, j);
+						function(params);
+					}
+				}
+
+				bs_ensureSize(&dir->entries, dir->entries.count = result.entries->count);
+				for (int j = 0; j < result.entries->count; j++) {
+					char* path = *(char**)bs_fetchUnitUnsafe(result.entries, j);
+					char** result = bs_fetchUnitUnsafe(&dir->entries, j);
+					*result = path;
+				}
+
+				bsmod_saveHooks(hooks);
+			}
+		}
+	}
+
+	reload_all = false;
+}

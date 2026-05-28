@@ -1,0 +1,46 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_ARB_shading_language_include : require
+
+#include "project/basilisk-gfx/shaders/bsgfx.glsl"
+
+layout(location = 0) rayPayloadEXT bsgfx_RayPayload pay;
+layout(binding = BSGFX_BINDING_ACCELERATION_STRUCTURE, set = BSGFX_SET_ACCELERATION_STRUCTURE) uniform accelerationStructureEXT scene;
+layout(binding = BSGFX_BINDING_RAY_TRACE_OUTPUT, set = BSGFX_SET_RAY_TRACE_OUTPUT, rgba32f) uniform image2D img;
+layout(set = BSGFX_SET_LO_RES_0, binding = BSGFX_BINDING_LO_RES_0_INDEX_ATTACHMENT) uniform usampler2D in_attachment_index_read;
+layout(set = BSGFX_SET_LO_RES_0, binding = BSGFX_BINDING_LO_RES_0_POSITION_ATTACHMENT) uniform sampler2D in_attachment_position_read;
+
+void main() {
+	vec3 orig = vec3(0.0, 1.0, 0.0), dir = vec3(0.0, -1.0, 0.0);
+	pay.hitSky = 0.0f;
+
+
+
+	traceRayEXT(
+		scene,
+		gl_RayFlagsOpaqueEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsTerminateOnFirstHitEXT,
+		0xFF,
+		0,
+		64,
+		0,
+		orig,
+		0.0,
+		dir,
+		1000.0,
+		0); 
+
+	ivec2 textureSizePixels = textureSize(in_attachment_index_read, 0);
+	vec2 texelSize = 1.0 / vec2(textureSizePixels);
+	vec2 texel = vec2(texelSize.x * gl_LaunchIDEXT.x, texelSize.y * gl_LaunchIDEXT.y);
+	uint index = texture(in_attachment_index_read, texel).r;
+    //uint flags = bsgfx_extractFlags(index);
+	vec3 position = texture(in_attachment_position_read, texel).rgb;
+
+	vec4 color = vec4(0, 0, 0, 1);
+	if (index == 2097153) {
+		color = vec4(0, 0, 1, 1);
+	}
+
+	ivec2 destination = ivec2(gl_LaunchIDEXT.xy);
+    imageStore(img, destination, color);
+} 

@@ -1,0 +1,479 @@
+#include <bsmod.h>
+#include <bsmod_type.h>
+#include <bsgfx.h>
+#include <types/bsgfx_type.h>
+#include <types/primitive/bsgfx_primitive.h>
+#include <types/prefab/bsgfx_prefab.h>
+#include <ui/bsgfx_ui.h>
+#include <types/light/bsgfx_light.h>
+
+#define BSGFX_AXIS_CLICK_SIZE (48)
+
+
+
+  /*==============================================================================
+   * Snapping Primitives
+   * TODO: Make generic for any type
+   =============================================================================*/
+
+static bs_mat4 bsgfx_primitiveOrigin(bsgfx_RawPrimitive* primitive, bs_vec3 origin) {
+	bs_mat4 m = BS_MAT4_IDENTITY;
+	bs_vec3 p = bsgfx_primitivePosition(primitive);
+
+
+	bs_translateP(&m, &p);
+	if (primitive->rotation.x != 0.0 || primitive->rotation.y != 0.0 || primitive->rotation.z != 0.0) {
+		bs_vec4 q = bs_qFromDegrees(primitive->rotation);
+		bs_rotateP(&m, &q);
+	}
+
+	//bs_vec3 s = bs_v3MulV1(primitive->scale, -1.0);
+	bs_vec3 o = bs_v3MulV1(origin, 1.0);
+	o = bs_v3Mul(o, primitive->scale);
+	bs_translateP(&m, &o);
+
+	bs_scaleP(&m, &primitive->scale);
+
+	return m;
+}
+
+void bsmod_snapPrimitive() {
+	static bs_vec2 cursor_start;
+	bs_vec2 cursor = bs_v2Add(bs_v2MulV1(poser()->world_camera.position, 4.0), bs_windowCursorPosition());
+
+	if (bsmod.edit_type_old != bsmod.edit_type) {
+		bsgfx_Primitive* primitive = bsgfx_get(BSGFX_TYPE_PRIMITIVE, bsmod_firstSelectedId(BSGFX_TYPE_PRIMITIVE));
+		if (primitive) {
+			cursor_start = cursor;
+		}
+	}
+
+	bs_RGBA axis_colors[3] = {
+		bs_rgba(255, 20, 50, 100),
+		bs_rgba(50, 255, 20, 100),
+		bs_rgba(50, 20, 255, 100)
+	};
+
+	bool edited = false;
+
+	for (int i = 0; i < bsgfx_count(BSGFX_TYPE_PRIMITIVE); i++) {
+		bsgfx_RawPrimitive* raw_primitive = bsgfx_getRaw(BSGFX_TYPE_PRIMITIVE, i);
+		bsgfx_Primitive* primitive = bsgfx_get(BSGFX_TYPE_PRIMITIVE, i);
+
+		if (bsmod_isSelected(BSMOD_IDS, BSGFX_TYPE_PRIMITIVE, i)) {
+			bs_vec2 diff = {
+				((cursor.x - cursor_start.x) / BSGFX_TILE_SIZE.x),
+				((cursor.y - cursor_start.y) / BSGFX_TILE_SIZE.y),
+			};
+
+			bs_vec3 previous_position = raw_primitive->position;
+			bs_vec3 previous_rotation = raw_primitive->rotation;
+			bs_vec3 previous_scale = raw_primitive->scale;
+
+			bs_mat4 transform;
+			if (bsmod_keyDown(BS_KEY_LEFT_CONTROL)) {
+				bsgfx_RawPrimitive* closest_primitive = bsgfx_getRaw(BSGFX_TYPE_PRIMITIVE, bsmod.hovering.closest_primitive);
+
+				bs_mat4 m = bsgfx_primitiveOrigin(closest_primitive, bsmod.hovering.closest_vertex);
+				bs_vec3 target = bs_m4MulV3(m, bs_v3V1(0));
+				float dist = bs_v3Dist(raw_primitive->position, target);
+				if (bsmod_keyDown(BS_KEY_LEFT_SHIFT)) {
+					bs_vec3 v1 = raw_primitive->position;
+					bs_vec3 v2 = target;
+					bs_vec4 q;
+					bs_vec3 a = bs_v3Cross(v1, v2);
+					q.xyz = a;
+					q.w = sqrt(bs_v3MagnitudeSqrd(v1) * bs_v3MagnitudeSqrd(v2)) + bs_v3Dot(v1, v2);
+					q = bs_qNormalize(q);
+					raw_primitive->rotation = bs_degreesFromQ(q);
+				}
+				else
+					raw_primitive->position = target;
+
+				bsgfx_map(BSGFX_TYPE_PRIMITIVE, i);
+			}
+
+			transform = bs_transform(primitive->position, primitive->rotation, primitive->scale);
+
+			bsgfx_instance(bsgfx_subtypes()[BSGFX_SUBTYPE_PRIMITIVE_BOX], &transform, sizeof(bs_mat4), BSGFX_ID_SELECTED | BSGFX_ID_INSTANCE_TYPE_MESH | BSGFX_ID_HIGHLIGHT | BSGFX_ID_IS_PRIMITIVE, 0, 0, 0);
+
+			if (bsmod_keyDown(BS_KEY_LEFT_CONTROL)) {
+				if (!bsmod_leftClickOnce()) {
+					raw_primitive->position = previous_position;
+					raw_primitive->rotation = previous_rotation;
+					raw_primitive->scale = previous_scale;
+					bsgfx_map(BSGFX_TYPE_PRIMITIVE, i);
+				}
+				else if (bsmod.edit_type != 0) {
+					edited = true;
+					bsmod.edit_type = 0;
+				}
+			}
+		}
+	}
+
+	//if (edited)
+	//	bs_io.left_clicked = false;
+}
+
+
+
+  /*==============================================================================
+   * Type Transformation
+   =============================================================================*/
+
+static inline bs_vec3 bsmod_axisScreenPosition(bs_vec3 position) {
+	position.x *= BSGFX_TILE_SIZE.x * 2.0;
+	position.x -= poser()->world_camera.position.x;
+
+	position.y -= position.z;
+	position.y *= BSGFX_TILE_SIZE.y * 2.0;
+	position.y -= poser()->world_camera.position.y;
+
+	position.x -= BSGFX_AXIS_CLICK_SIZE * 0.5;
+	position.y -= BSGFX_AXIS_CLICK_SIZE * 0.5;
+
+	position.z = 10.0;
+
+	return position;
+}
+
+static inline bs_vec3 bsmod_worldToScreenCoords(bs_vec3 world_coords, float width) {
+	bs_ivec2 resolution = bs_resolution();
+	bs_mat4 camera = poser()->camera.result;
+	bs_vec4 px = bs_m4MulV4(camera, bs_v4V3(world_coords, 1.0));
+	bs_vec3 px1 = bs_v3DivV1(px.xyz, px.w);
+	px1.x = (px1.x + 1.0f) * 0.5f * resolution.x - width / 2.0;
+	px1.y = (px1.y + 1.0f) * 0.5f * resolution.y - width / 2.0;
+	px1.z *= 100.0;
+	return px1;
+}
+
+ /**
+  Will rebuild this when needed, should be multi-purpose
+  */
+void bsmod_instanceTransform() {
+	if (bsmod.selected_ids.count == 0)
+		return;
+	return;
+	bs_vec3 position = { 0 };
+	bs_vec4 rotation = { 0, 0, 0, 1 };
+	bs_vec3 scale = { 1, 1, 1 };
+
+	bsgfx_TypeId type = bsmod.selected_type;
+	int position_offset = 0, rotation_offset = 0, scale_offset = 0;
+	int unit_size = 0;
+	switch (type) {
+	case BSGFX_TYPE_PRIMITIVE:
+		unit_size = sizeof(bsgfx_RawPrimitive);
+		position_offset = offsetof(bsgfx_RawPrimitive, position);
+		rotation_offset = offsetof(bsgfx_RawPrimitive, rotation);
+		scale_offset = offsetof(bsgfx_RawPrimitive, scale);
+		break;
+	case BSGFX_TYPE_PREFAB: {
+		unit_size = sizeof(bsgfx_RawPrefab);
+		position_offset = offsetof(bsgfx_RawPrefab, position);
+		rotation_offset = offsetof(bsgfx_RawPrefab, rotation);
+		scale_offset = offsetof(bsgfx_RawPrefab, scale);
+		break;
+	}
+	case BSGFX_TYPE_LIGHT: {
+		unit_size = sizeof(bsgfx_RawLight);
+		position_offset = offsetof(bsgfx_RawLight, position);
+		rotation_offset = offsetof(bsgfx_RawLight, rotation);
+		scale_offset = -1;
+		break;
+	};
+	default: return;
+	}
+
+	for (int i = 0; i < bsmod.selected_ids.count; i++) {
+		int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+		unsigned char* data = bsgfx_getRaw(type, *id);
+
+		bs_vec3* p = data + position_offset;
+		bs_vec3* r = data + rotation_offset;
+
+		position = bs_v3Add(position, *p);
+		if (rotation_offset != -1)
+			rotation = bsmod.selected_ids.count == 1 ?
+				bs_qFromDegrees(*r) :
+				BS_QUAT_IDENTITY;
+	}
+
+	position = bs_v3DivV1(position, bsmod.selected_ids.count);
+
+	bs_mat4 transform = bs_transform(position, rotation, scale);
+
+	if (bsmod_leftClickUpOnce() && bsmod.axis != -1) {
+		bsmod_saveType(type, NULL);
+
+		bsmod.axis = -1;
+	}
+
+	const float axis_length = 1.0;
+	const float radius = 0.2;
+	float theta = BS_PI / 2.0;
+
+	bs_vec3 origin = bs_m4MulV3(transform, bs_v3V1(0));
+	bs_vec3 x = bs_m4MulV3(transform, bs_v3(axis_length, 0, 0));
+	bs_vec3 y = bs_m4MulV3(transform, bs_v3(0, axis_length, 0));
+	bs_vec3 z = bs_m4MulV3(transform, bs_v3(0, 0, axis_length));
+
+	bs_vec3 directions[3] = {
+		bs_v3Normalize(bs_v3Sub(origin, x)),
+		bs_v3Normalize(bs_v3Sub(origin, y)),
+		bs_v3Normalize(bs_v3Sub(origin, z))
+	};
+
+	bs_vec4 xr = bs_qMulq(rotation, bs_qAxisAngle(bs_v3(0, 0, 1), -BS_PI / 2.0));
+	bs_vec4 zr = bs_qMulq(rotation, bs_qAxisAngle(bs_v3(1, 0, 0), BS_PI / 2.0));
+
+	bs_mat4 om = bs_transform(origin, rotation, bs_v3V1(radius));
+	bs_mat4 xm = bs_transform(x, xr, bs_v3V1(radius));
+	bs_mat4 ym = bs_transform(y, rotation, bs_v3V1(radius));
+	bs_mat4 zm = bs_transform(z, zr, bs_v3V1(radius));
+
+	bsgfx_transformedDepthlessLineInstance(bs_v3V1(0), bs_v3(axis_length, 0.0, 0.0), BS_RED, &transform);
+	bsgfx_transformedDepthlessLineInstance(bs_v3V1(0), bs_v3(0.0, axis_length, 0.0), BS_GREEN, &transform);
+	bsgfx_transformedDepthlessLineInstance(bs_v3V1(0), bs_v3(0.0, 0.0, axis_length), BS_BLUE, &transform);
+
+	bsgfx_instanceCone(xm, radius, 0, 0, bsmod.axis == 0 ? $yellow_material()->id : $red_material()->id);
+	bsgfx_instanceCone(ym, radius, 0, 0, bsmod.axis == 1 ? $yellow_material()->id : $green_material()->id);
+	bsgfx_instanceCone(zm, radius, 0, 0, bsmod.axis == 2 ? $yellow_material()->id : $blue_material()->id);
+
+	bs_Atlas* atlas = bs_fetch(BSGFX_ATLASES, BSGFX_ATLAS_ANY)->atlas;
+	int white = bs_queryAtlas(atlas, "white");
+
+	bs_vec3 op = bs_m4MulV3(om, bs_v3(0, 0, 0));
+	bs_vec3 xp = bs_m4MulV3(xm, bs_v3(0, 0, 0));
+	bs_vec3 yp = bs_m4MulV3(ym, bs_v3(0, 0, 0));
+	bs_vec3 zp = bs_m4MulV3(zm, bs_v3(0, 0, 0));
+
+	bs_vec2 click_size = bs_v2V1(BSGFX_AXIS_CLICK_SIZE);
+
+	// dux_atlasHiResInstance(atlas, xs, white, 0, click_size, bs_v4(1, 0, 0, 1), false);
+	// dux_atlasHiResInstance(atlas, ys, white, 0, click_size, 
+	// bs_v4(0, 1, 0, 1), false);
+	// dux_atlasHiResInstance(atlas, zs, white, 0, click_size, bs_v4(0, 0, 1, 1), false);
+
+	static int last_axis = -1;
+	static bs_vec2 last_cursor, pressed_cursor;
+	bs_vec2 cursor = bs_windowCursorPosition();
+
+	static struct {
+		float rotation;
+	}*initial_values;
+	static float tile_remainder[3];
+
+	static int allocated_rotations;
+
+	if (allocated_rotations < bsmod.selected_ids.capacity) {
+		initial_values = bs_realloc(initial_values, bsmod.selected_ids.capacity * sizeof(*initial_values));
+		//memset(initial_values + allocated_rotations, 0, (bsgfx_debug.selected_capacity - allocated_rotations) * sizeof(*initial_values));
+		allocated_rotations = bsmod.selected_ids.capacity;
+	}
+
+	bs_ivec2 resolution = bs_resolution();
+
+   /**
+    Detect clicked axis
+    */
+	float width = 36;
+	bs_vec3 screen_coordinates[] = {
+		bsmod_worldToScreenCoords(x, width),
+		bsmod_worldToScreenCoords(y, width),
+		bsmod_worldToScreenCoords(z, width),
+	};
+	static bs_vec3 start_coordinate;
+	static bs_vec2 start_direction;
+	bs_vec3 closest_coordinate;
+	float closest_z = BS_FLT_MAX;
+	int closest_axis = 0;
+
+	for (int i = 0; i < 3; i++) {
+		if (screen_coordinates[i].z < closest_z) {
+
+			if (bs_rectangleVsPoint(screen_coordinates[i].xy, bs_v2(width, width), cursor)) {
+				closest_coordinate = screen_coordinates[i];
+				closest_z = screen_coordinates[i].z;
+				closest_axis = i;
+			}
+		}
+	}
+
+	if (closest_z != BS_FLT_MAX) {
+		if (bsmod_leftClickOnce()) {
+			bsmod.ui_blocked = true;
+			bsmod.axis = closest_axis;
+			start_coordinate = bsmod_worldToScreenCoords(origin, 1.0);
+			start_direction = bs_v2Normalize(bs_v2Sub(cursor, start_coordinate.xy));
+		}
+	}
+
+	//bsgfx_instanceQuad(bsgfx_subtypes()[BSGFX_SUBTYPE_UI], bsgfx_matrix(sx, bs_v3(width, width, 0.0)), $BSMOD_ATLAS_UI_white()->coords, 0, 0, $yellow_material()->id);
+	//bsgfx_instanceQuad(bsgfx_subtypes()[BSGFX_SUBTYPE_UI], bsgfx_matrix(sy, bs_v3(width, width, 0.0)), $BSMOD_ATLAS_UI_white()->coords, 0, 0, $yellow_material()->id);
+	//bsgfx_instanceQuad(bsgfx_subtypes()[BSGFX_SUBTYPE_UI], bsgfx_matrix(sz, bs_v3(width, width, 0.0)), $BSMOD_ATLAS_UI_white()->coords, 0, 0, $yellow_material()->id);
+
+	//bsgfx_instancePoint(px1, BS_YELLOW, 16.0);
+	//int cone_subtype = bsgfx_subtypes()[BSGFX_SUBTYPE_CONE_MESH];
+	//if (bsmod_leftClickOnce() && bsmod.hovering.subtype == cone_subtype) {
+	//	pressed_cursor = cursor;
+	//	int new_axis = bsmod.hovering.instance_id - editor_cone_offset;
+	//	if (new_axis >= 0 && new_axis < 3)
+	//		bsmod.axis = bsmod.hovering.instance_id - editor_cone_offset;
+	//}
+	static float last_angle = 0.0f;
+
+
+	if (rotation_offset != -1 && bsmod_keyDownOnce(BS_KEY_ALT)) {
+		bs_vec2 up = bs_v2(0.0, 1.0);
+		bs_vec2 diff = bs_v2Sub(cursor, start_coordinate.xy);
+		diff = bs_v2NormalizeV2(diff.x, diff.y);
+
+		float dot = bs_v2Dot(up, diff);
+		float cross = up.x * diff.y - up.y * diff.x;
+		last_angle = bs_degrees(atan2(cross, dot));
+		if (last_angle < 0.0)
+			last_angle += 360.0;
+
+		for (int i = 0; i < bsmod.selected_ids.count; i++) {
+			int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+			unsigned char* data = bsgfx_getRaw(type, *id);
+
+			bs_vec3* r = data + rotation_offset;
+
+			initial_values[i].rotation = r->a[bsmod.axis];
+		}
+	}
+
+	if (bsmod.axis != -1) {
+	   /**
+	    Rotate
+	    */
+		if (rotation_offset != -1 && bsmod_keyDown(BS_KEY_ALT)) {
+
+			bs_vec2 up = bs_v2(0.0, 1.0);
+			bs_vec2 diff = bs_v2Sub(cursor, start_coordinate.xy);
+
+			const float angle_snap = 15.0;
+			const int segments = 16;
+			unsigned char alpha = 255;
+
+			if (bsmod.axis == 0)
+				bsgfx_transformedDepthlessCircle(bs_transform(origin, zr, bs_v3V1(1)), segments, axis_length, bs_rgba(0, 0, 255, alpha));
+			else if (bsmod.axis == 1)
+				bsgfx_transformedDepthlessCircle(bs_transform(origin, rotation, bs_v3V1(1)), segments, axis_length, bs_rgba(0, 255, 0, alpha));
+			else if (bsmod.axis == 2)
+				bsgfx_transformedDepthlessCircle(bs_transform(origin, xr, bs_v3V1(1)), segments, axis_length, bs_rgba(255, 0, 0, alpha));
+
+			diff = bs_v2NormalizeV2(diff.x, diff.y);
+
+			float dot = bs_v2Dot(up, diff);
+
+			float cross = up.x * diff.y - up.y * diff.x;
+			float current_angle = bs_degrees(atan2(cross, dot));
+			if (current_angle < 0.0)
+				current_angle += 360.0;
+
+			float delta_angle = current_angle - last_angle;
+
+			for (int i = 0; i < bsmod.selected_ids.count; i++) {
+				int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+				unsigned char* data = bsgfx_getRaw(type, *id);
+
+				bs_vec3* r = data + rotation_offset;
+
+				float* result = r->a + bsmod.axis;
+				*result = initial_values[i].rotation + delta_angle;
+				*result = roundf((*result) / angle_snap) * angle_snap;
+
+				//bsgfx_instanceHintF(menu, origins[bsmod.axis], "%f", *result);
+
+				bsgfx_map(type, *id);
+			}
+		}
+	   /**
+	    Translate / Scale
+	    */
+		else {
+			const float d45 = bs_radians(45);
+			bs_mat3 r = {
+				1, 0, 0,
+				0, cos(d45), -sin(d45),
+				0, sin(d45), cos(d45)
+			};
+
+			bs_vec3 mul = bs_m3MulV3(r, directions[bsmod.axis]);
+			if (bs_abs(mul.y) < 0.1) // hack
+				mul.y += mul.z;
+
+			bs_vec2 diff = bs_v2Sub(last_cursor, cursor);
+			float magnitude = bs_v2Magnitude(diff);
+			diff = bs_v2NormalizeV2(diff.x, diff.y);
+
+			float d = bs_v2Dot(mul.xy, diff) * magnitude;
+
+			float scales[3] = { BSGFX_TILE_SIZE.x, BSGFX_TILE_SIZE.y, BSGFX_TILE_SIZE.y };
+
+			if (bsmod_keyDown(BS_KEY_LEFT_CONTROL)) {
+				for (int j = 0; j < 3; j++) {
+					float move_tiles = (directions[bsmod.axis].a[j] * -d / scales[j]) / 2.0f;
+					for (int i = 0; i < bsmod.selected_ids.count; i++) {
+						int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+						unsigned char* data = bsgfx_getRaw(type, *id);
+						bs_vec3* p = data + position_offset;
+
+						p->a[j] += 0.1 * move_tiles;
+						bsgfx_map(type, *id);
+					}
+				}
+			}
+			else if (bs_abs(d) > 0.5f) {
+				if (scale_offset != -1 && bsmod_keyDown(BS_KEY_LEFT_SHIFT)) {
+					float move_tiles = (directions[bsmod.axis].a[bsmod.axis] * -d / scales[bsmod.axis]) / 2.0f;
+
+					tile_remainder[bsmod.axis] += move_tiles;
+
+					if (fabs(tile_remainder[bsmod.axis]) >= 0.5f) {
+						int half_tile_steps = (int)round(tile_remainder[bsmod.axis] * 1.0f);
+
+						for (int i = 0; i < bsmod.selected_ids.count; i++) {
+							int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+							unsigned char* data = bsgfx_getRaw(type, *id);
+							bs_vec3* s = data + scale_offset;
+
+							s->a[bsmod.axis] += half_tile_steps * 0.5;
+							bsgfx_map(type, *id);
+						}
+
+						tile_remainder[bsmod.axis] -= half_tile_steps / 2.0f;
+					}
+				}
+				else {
+					for (int j = 0; j < 3; j++) {
+						float move_tiles = (directions[bsmod.axis].a[j] * -d / scales[j]) / 2.0f;
+
+						tile_remainder[j] += move_tiles;
+
+						if (fabs(tile_remainder[j]) >= 0.5f) {
+							int half_tile_steps = (int)round(tile_remainder[j] * 2.0f);
+							for (int i = 0; i < bsmod.selected_ids.count; i++) {
+								int* id = bs_fetchUnitUnsafe(&bsmod.selected_ids, i);
+								unsigned char* data = bsgfx_getRaw(type, *id);
+								bs_vec3* p = data + position_offset;
+
+								p->a[j] += half_tile_steps * 0.5;
+								p->a[j] = roundf(p->a[j] * 2.0) * 0.5;
+								bsgfx_map(type, *id);
+							}
+							tile_remainder[j] -= half_tile_steps / 2.0f;
+						}
+					}
+				}
+			}
+		}
+	}
+	last_cursor = cursor;
+	last_axis = bsmod.axis;
+}

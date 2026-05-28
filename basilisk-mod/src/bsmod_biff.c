@@ -1,0 +1,122 @@
+#include <bs_types.h>
+#include <bs_images.h>
+#include <bs_mem.h>
+#include <bs_log.h>
+
+#include <bsmod_bpak.h>
+
+#include <string.h>
+#include <assert.h>
+
+void bsmod_saveBiff() {
+	bs_BiffHeader header = {
+		.magic = 0x66666962,
+		.version = 1,
+	};
+}
+
+typedef struct {
+	char* name;
+	int name_length;
+	unsigned char* bmp;
+	size_t size;
+} bsmod_BiffInfo;
+
+typedef struct {
+	bs_BiffHeader* header;
+	bs_List* output;
+	char* resource_name;
+	size_t total_images_size;
+	size_t total_name_lengths;
+} bsmod_FileGatherParams;
+
+static void bsmod_gatherFileInfo(bs_FileInfo info, bsmod_FileGatherParams* param) {
+	char* file_extension = bs_fileExtension(info.path);
+
+	if (strcmp(file_extension, "png") == 0) {
+		int width = 0, height = 0;
+		unsigned char* bmp = bs_loadPng(info.path, &width, &height, param->header->channels_count);
+
+		if (param->header->width == 0) { // dimensions = first texture dimensions
+			param->header->width = width;
+			param->header->height = height;
+		}
+		else if (width != param->header->width || height != param->header->height) {
+			return bs_warnF("Image \"%s\" (w = %d, h = %d) could not be added to image array \"%s\" (w = %d, h = %d) due to mismatching dimensions\n",
+				info.path, width, height, param->resource_name, param->header->width, param->header->height);
+		}
+
+		file_extension[-1] = '\0';
+		char* name = bs_fileName(info.path);
+		bsmod_BiffInfo* result = bs_pushBack(param->output, &(bsmod_BiffInfo) {
+			.name = strdup(name),
+			.name_length = strlen(name),
+			.bmp = bmp,
+			.size = width * height * param->header->channels_count,
+		});
+		file_extension[-1] = '.';
+
+		param->total_images_size += result->size;
+		param->total_name_lengths += result->name_length + 2;
+	}
+}
+
+void bsmod_packImageDirectory(char* directory_name, char* package_name, char* resource_name) {
+	bs_List images = bs_list(sizeof(bsmod_BiffInfo), 32);
+
+	bs_BiffHeader header = {
+		.magic = 0x66666962,
+		.version = 1,
+		.channels_count = 4,
+	};
+
+	bsmod_FileGatherParams param = {
+		.header = &header,
+		.output = &images,
+		.resource_name = resource_name,
+	};
+
+	bs_foreachFile(bsmod_gatherFileInfo, &param, directory_name);
+
+	const size_t total_size_excluding_binary = sizeof(bs_BiffHeader) + sizeof(bs_BiffPointer) * images.count + param.total_name_lengths;
+	const size_t total_size = total_size_excluding_binary + param.total_images_size;
+
+	unsigned char* biff = bs_malloc(total_size);
+
+	size_t pointer_offset = sizeof(bs_BiffHeader);
+	size_t binary_offset = total_size_excluding_binary;
+
+	for (int i = 0; i < images.count; i++) {
+		bsmod_BiffInfo* image = bs_fetchUnitUnsafe(&images, i);
+
+		// image header
+		memcpy(biff + pointer_offset, &(bs_BiffPointer) {
+			.name_length = image->name_length,
+			.offset = binary_offset,
+			.size = image->size,
+		}, sizeof(bs_BiffPointer));
+		pointer_offset += sizeof(bs_BiffPointer);
+
+		// image name
+		memcpy(biff + pointer_offset, image->name, image->name_length);
+		pointer_offset += image->name_length;
+		memcpy(biff + pointer_offset, "\0\n", 2);
+		pointer_offset += 2;
+
+		// image data
+		assert((binary_offset + image->size) <= total_size);
+		memcpy(biff + binary_offset, image->bmp, image->size);
+		binary_offset += image->size;
+
+		free(image->name);
+		free(image->bmp);
+	}
+
+	header.images_count = images.count;
+	memcpy(biff, &header, sizeof(bs_BiffHeader));
+
+	bs_destroyList(&images);
+
+	bsmod_packResource(BS_RESOURCE_IMAGE, biff, total_size, package_name, resource_name);
+	bs_free(biff);
+}

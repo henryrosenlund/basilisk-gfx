@@ -1,0 +1,139 @@
+#include <types/foliage/bsgfx_foliage.h>
+#include <bsgfx.h>
+
+static void bsgfx_mapFoliage(const bsgfx_RawFoliage* unmapped, bsgfx_Foliage* mapped) {
+    *mapped = (bsgfx_Foliage){
+        .density = unmapped->density,
+        .guid = unmapped->guid,
+        .textures_count = unmapped->textures_count,
+    };
+
+    for (int i = 0; i < mapped->textures_count; i++) {
+        mapped->textures[i] = (struct bsgfx_FoliageTexture){
+            //.id =  unmapped->textures[i].texture_hash,
+            .color = unmapped->textures[i].color,
+        };
+    }
+}
+
+static void bsgfx_loadFoliage(bsgfx_Foliage* foliage, bs_String* binary) {
+    bs_Batch* batch = bs_fetch(BSGFX_BATCHES, BSGFX_BATCH_FOLIAGE)->batch;
+    bs_Atlas* atlas = bs_fetch(BSGFX_ATLASES, BSGFX_ATLAS_ANY)->atlas;
+
+    bs_vec3* vertices = binary->value;
+    int num_vertices = binary->len / sizeof(bs_vec3) / 2;
+    bs_vec3* normals = binary->value + num_vertices * sizeof(float) * 3;
+
+    for (int i = 0; i < foliage->textures_count; i++) {
+        int texture = foliage->textures[i].id;
+        foliage->textures[i].size = bs_v2DivV1(bs_atlasSize(atlas, texture), BSGFX_TILE_SIZE.x * 2.0 / BSGFX_PIXEL_SCALE);
+        foliage->textures[i].coords = bs_atlasCoordinates(atlas, texture, 0);
+    }
+
+    if (foliage->textures_count <= 0)
+        return;
+
+    BS_VERTEX_DECLARATION(
+        declaration, batch, &batch->vertices.count,
+        bs_vec4, bs_Position,
+        bs_vec3, bs_Normal,
+        bs_vec3, bs_Texture,
+        bs_RGBA, bs_Color
+    );
+
+    //	bs_mat4 transform = bs_transform(position, rotation, scale);
+    bs_mat3 rotation = bs_qToMat3(bs_qFromRadians(bs_v3(bs_radians(0), bs_radians(0), bs_radians(-45))));
+    for (int i = 0; i < num_vertices; i++) {
+        int texture = bs_randRangeI(0, foliage->textures_count - 1);
+        bs_vec4 coords = foliage->textures[texture].coords;
+        bs_vec2 size = foliage->textures[texture].size;
+
+        bs_Quad q = bs_quad(bs_v3(-size.x / 2.0, size.y / 2.0, 0.0), size);
+        q.a = bs_m3MulV3(rotation, q.a);
+        q.b = bs_m3MulV3(rotation, q.b);
+        q.c = bs_m3MulV3(rotation, q.c);
+        q.d = bs_m3MulV3(rotation, q.d);
+        bs_moveQuad(&q, bs_v3Add(vertices[i], bs_v3(0, 0, .75)));
+
+        if (normals[i].z < -0.1) {
+            q.cb = bs_v2(coords.x, coords.w);
+            q.ca = bs_v2(coords.z, coords.w);
+            q.cd = bs_v2(coords.x, coords.y);
+            q.cc = bs_v2(coords.z, coords.y);
+        }
+        else {
+            q.cb = bs_v2(coords.x, coords.y);
+            q.ca = bs_v2(coords.z, coords.y);
+            q.cd = bs_v2(coords.x, coords.w);
+            q.cc = bs_v2(coords.z, coords.w);
+        }
+
+        float random = bs_randRange(0, atlas->mapped[foliage->textures[texture].id].split);
+        bs_ensureBatchSize(batch, 6, 4);
+        bs_pushIndexV(batch, 6, 1, 2, 0, 2, 1, 3);
+        bs_batchVertex(&declaration, &(bs_Vertex) {.bs_Position = bs_v4V3(q.a, foliage->textures[texture].id), .bs_Texture = bs_v3V2(q.ca, random), .bs_Normal = normals[i], .bs_Color = BS_WHITE });
+        bs_batchVertex(&declaration, &(bs_Vertex) {.bs_Position = bs_v4V3(q.b, foliage->textures[texture].id), .bs_Texture = bs_v3V2(q.cb, random), .bs_Normal = normals[i], .bs_Color = BS_WHITE });
+        bs_batchVertex(&declaration, &(bs_Vertex) {.bs_Position = bs_v4V3(q.c, foliage->textures[texture].id), .bs_Texture = bs_v3V2(q.cc, random), .bs_Normal = normals[i], .bs_Color = BS_WHITE });
+        bs_batchVertex(&declaration, &(bs_Vertex) {.bs_Position = bs_v4V3(q.d, foliage->textures[texture].id), .bs_Texture = bs_v3V2(q.cd, random), .bs_Normal = normals[i], .bs_Color = BS_WHITE });
+    }
+}
+
+void bsgfx_loadFoliages(int package_id) {
+    bs_except(BSX_FAILED_TO_QUERY);
+    bsgfx_type(
+        BSGFX_TYPE_FOLIAGE,
+        BSGFX_FOLIAGE_VERSION,
+        package_id,
+        "foliages", "foliage",
+        sizeof(bsgfx_RawFoliage), sizeof(bsgfx_Foliage), bsgfx_mapFoliage,
+        offsetof(bsgfx_RawFoliage, textures_count), offsetof(bsgfx_Foliage, textures_count),
+        sizeof(struct bsgfx_RawFoliageTexture), sizeof(struct bsgfx_FoliageTexture));
+    if (bs_caught())
+        return;
+
+    int level_name_len = strlen(_bsgfx_current_scene.name);
+    char* path = bs_charStringF("resources/levels/%s/foliage/XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX.bin", _bsgfx_current_scene.name);
+    bs_Batch* batch = bs_batch(BS_BATCH(BSGFX_BATCHES, BSGFX_BATCH_FOLIAGE, 0), sizeof(bs_U32), $vs_bsgfx_foliage(), BS_BATCH_FORCE_DESTROY)->batch;
+
+    for (int i = 0; i < bsgfx_count(BSGFX_TYPE_FOLIAGE); i++) {
+        bsgfx_Foliage* foliage = bsgfx_get(BSGFX_TYPE_FOLIAGE, i);
+
+        char* start = path + sizeof("resources/levels/foliage/") + level_name_len;
+        bs_guidToString(&foliage->guid, start);
+        strcpy(start + 36, ".bin");
+
+        bs_except(BSX_FAILED_TO_QUERY);
+        bsgfx_queryPrimitive(&foliage->guid);
+        if (bs_caught()) {
+            bs_warnF("%s does not belong to any primitive!\n", path);
+            continue;
+        }
+
+        bs_String* binary = bs_loadFile(path);
+        if (!binary) {
+            bs_warnF("%s does not exist!\n", path);
+            continue;
+        }
+
+        bsgfx_loadFoliage(foliage, binary);
+        bs_free(binary);
+    }
+
+    bs_free(path);
+
+    bs_pushBatch(batch, BS_U32_MAX, BS_U32_MAX);
+}
+
+int bsgfx_queryFoliage(bs_GUID* guid) {
+    for (int i = 0; i < bsgfx_count(BSGFX_TYPE_FOLIAGE); i++) {
+        bsgfx_Foliage* foliage = bsgfx_get(BSGFX_TYPE_FOLIAGE, i);
+        if (bs_sameGuid(&foliage->guid, guid))
+            return i;
+    }
+
+    char str[37];
+    bs_guidToString(guid, str);
+    bs_throwBasiliskF(BSX_FAILED_TO_QUERY, "Foliage %s", str);
+
+    return -1;
+}
