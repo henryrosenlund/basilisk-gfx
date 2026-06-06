@@ -13,6 +13,7 @@ typedef struct {
 } bsgen_List;
 
 static inline void* bsgen_fetchUnit(bsgen_List* list, int offset) {
+    assert(offset >= 0);
     assert(offset < list->capacity);
     return list->data + offset * list->unit_size;
 }

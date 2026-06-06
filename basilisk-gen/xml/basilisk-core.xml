@@ -1,7 +1,8 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <registry>
 	<includes>
-		<include>stdlib.h</include>
+		<include>stdarg.h</include>
+		<include>string.h</include>
 	</includes>
 	
 	<typedefs>
@@ -2969,13 +2970,12 @@
             <param><type>bs_ivec2</type><name>size</name></param>
             <param><type>bs_PngType</type><name>type</name></param>
         </function>
-        <function name="bs_savePngF">
+        <function name="bs_savePng" stringFormat="path">
             <return>void</return>
             <param><type>char*</type><name>data</name></param>
             <param><type>bs_ivec2</type><name>resolution</name></param>
             <param><type>bs_PngType</type><name>type</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_destroyImage">
             <return>void</return>
@@ -3160,12 +3160,11 @@
             <param><type>bs_U32</type><name>type</name></param>
             <param><type>const char*</type><name>name</name></param>
         </function>
-        <function name="bsi_nameHandleF">
+        <function name="bsi_nameHandle" stringFormat="path">
             <return>void</return>
             <param><type>bs_U64</type><name>handle</name></param>
             <param><type>bs_U32</type><name>type</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_procedures">
             <return>bs_Procs*</return>
@@ -3212,10 +3211,9 @@
             <return>bs_Json</return>
             <param><type>const char*</type><name>path</name></param>
         </function>
-        <function name="bs_loadJsonF">
+        <function name="bs_loadJson" stringFormat="path">
             <return>bs_Json</return>
-            <param><type>char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_destroyJson">
             <return>void</return>
@@ -3225,42 +3223,22 @@
             <return>bs_JsonValue</return>
             <param><type>char*</type><name>raw</name></param>
         </function>
-        <function name="bs_fetchJson">
+        <function name="bs_fetchJson" stringFormat="path">
             <return>bs_JsonValue</return>
             <param><type>bs_Json*</type><name>root</name></param>
             <param><type>bs_JsonType</type><name>expect</name></param>
             <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_fetchJsonF">
-            <return>bs_JsonValue</return>
-            <param><type>bs_Json*</type><name>root</name></param>
-            <param><type>bs_JsonType</type><name>expect</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_deleteJson">
+        <function name="bs_deleteJson" stringFormat="path">
             <return>void</return>
             <param><type>bs_Json*</type><name>root</name></param>
             <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_deleteJsonF">
-            <return>void</return>
-            <param><type>bs_Json*</type><name>root</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_ensureJson">
+        <function name="bs_ensureJson" stringFormat="path">
             <return>bool</return>
             <param><type>bs_Json*</type><name>root</name></param>
             <param><type>bs_JsonValue</type><name>value</name></param>
             <param><type>char*</type><name>path</name></param>
-        </function>
-        <function name="bs_ensureJsonF">
-            <return>bool</return>
-            <param><type>bs_Json*</type><name>root</name></param>
-            <param><type>bs_JsonValue</type><name>value</name></param>
-            <param><type>const char*</type><name>path</name></param>
-            <param><name>...</name></param>
         </function>
         <function name="bs_jsonValueFromObject">
             <return>bs_JsonValue</return>
@@ -3320,60 +3298,35 @@
             <return>bs_JsonValue</return>
             <param><type>bs_RGBA</type><name>color</name></param>
         </function>
-        <function name="bs_logSectionV" section="bs_log.h">
+        <function name="bs_logSection" stringFormat="message">
             <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
-        </function>
-        <function name="bs_logSectionF">
-            <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
         <function name="bs_logEndOfSection">
             <return>char*</return>
         </function>
-        <function name="bs_logWithTimestampV">
+        <function name="bs_logWithTimestamp" stringFormat="message">
             <return>char*</return>
             <param><type>const char*</type><name>type</name></param>
             <param><type>int</type><name>type_len</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
-        <function name="bs_logV">
+        <function name="bs_log" stringFormat="value">
             <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>value</name></param>
+			
         </function>
-        <function name="bs_warnV">
+        <function name="bs_info" stringFormat="message">
             <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
-        <function name="bs_throwV">
+        <function name="bs_warn" stringFormat="message">
             <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
-        <function name="bs_infoF">
-            <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_infoF">
-            <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_warnF">
+        <function name="bs_throw" stringFormat="message">
             <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_throwF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
         <function name="bs_throwBasilisk">
             <return>void</return>
@@ -3394,11 +3347,10 @@
             <return>void</return>
             <param><type>bs_U64</type><name>code</name></param>
         </function>
-        <function name="bsi_throwBasiliskF">
+        <function name="bsi_throwBasilisk" stringFormat="message">
             <return>void</return>
             <param><type>bs_U64</type><name>code</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>message</name></param>
         </function>
         <function name="bs_throwErrno">
             <return>void</return>
@@ -3473,23 +3425,9 @@
         <function name="bs_config">
             <return>bs_Config*</return>
         </function>
-        <function name="bs_system">
+        <function name="bs_system" stringFormat="command">
             <return>void</return>
-            <param><type>char*</type><name>s</name></param>
-        </function>
-        <function name="bs_systemAsync">
-            <return>void</return>
-            <param><type>char*</type><name>s</name></param>
-        </function>
-        <function name="bs_systemV">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
-        </function>
-        <function name="bs_systemF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>command</name></param>
         </function>
         <function name="bs_checkStringPool">
             <return>const char*</return>
@@ -3511,17 +3449,10 @@
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>old</name></param>
         </function>
-        <function name="bs_stringF">
+        <function name="bs_string" stringFormat="value">
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>old</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_stringV">
-            <return>bs_String*</return>
-            <param><type>bs_String*</type><name>old</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>value</name></param>
         </function>
         <function name="bs_toUpper">
             <return>void</return>
@@ -3580,15 +3511,9 @@
             <param><type>char*</type><name>string</name></param>
             <param><type>int</type><name>len</name></param>
         </function>
-        <function name="bs_copyToClipboardV">
+        <function name="bs_copyToClipboard" stringFormat="value">
             <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
-        </function>
-        <function name="bs_copyToClipboardF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>value</name></param>
         </function>
         <function name="bs_shortenString">
             <return>void</return>
@@ -3601,17 +3526,10 @@
             <param><type>char*</type><name>append</name></param>
             <param><type>int</type><name>len</name></param>
         </function>
-        <function name="bs_appendStringF">
+        <function name="bs_appendString" stringFormat="value">
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>string</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_appendStringV">
-            <return>bs_String*</return>
-            <param><type>bs_String*</type><name>string</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
+            <param><type>char*</type><name>value</name></param>
         </function>
         <function name="bs_appendChar">
             <return>bs_String*</return>
@@ -3681,15 +3599,9 @@
             <param><type>wchar_t*</type><name>dst</name></param>
             <param><type>bs_U32</type><name>dst_size</name></param>
         </function>
-        <function name="bs_charStringV">
+        <function name="bs_charString" stringFormat="value">
             <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><type>va_list</type><name>args</name></param>
-        </function>
-        <function name="bs_charStringF">
-            <return>char*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>value</name></param>
         </function>
         <function name="bs_free">
             <return>void*</return>
@@ -3792,102 +3704,55 @@
             <return>bool</return>
             <param><type>bs_GUID*</type><name>guid</name></param>
         </function>
-        <function name="bs_foreachFile">
+        <function name="bs_foreachFile" stringFormat="path">
             <return>void</return>
             <param><name>void(*x)(bs_FileInfo, void*)</name></param>
             <param><type>void*</type><name>param</name></param>
-            <param><type>const char*</type><name>directory</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_foreachDirectory">
+        <function name="bs_foreachDirectory" stringFormat="path">
             <return>void</return>
             <param><name>void(*x)(bs_FileInfo, void*)</name></param>
             <param><type>void*</type><name>param</name></param>
-            <param><type>const char*</type><name>directory</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_foreachFileF">
-            <return>void</return>
-            <param><name>void(*x)(bs_FileInfo, void*)</name></param>
-            <param><type>void*</type><name>param</name></param>
-            <param><type>char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_foreachDirectoryF">
-            <return>void</return>
-            <param><name>void(*x)(bs_FileInfo, void*)</name></param>
-            <param><type>void*</type><name>param</name></param>
-            <param><type>char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_numFiles">
+        <function name="bs_numFiles" stringFormat="path">
             <return>int</return>
-            <param><type>const char*</type><name>directory</name></param>
-        </function>
-        <function name="bs_numFilesF">
-            <return>int</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_numDirectories">
             <return>int</return>
             <param><type>const char*</type><name>directory</name></param>
         </function>
-        <function name="bs_numDirectoriesF">
+        <function name="bs_numDirectories" stringFormat="path">
             <return>int</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_numDigits">
             <return>int</return>
             <param><type>int</type><name>n</name></param>
         </function>
-        <function name="bs_loadFile">
+        <function name="bs_loadFile" stringFormat="path">
             <return>bs_String*</return>
-            <param><type>const char*</type><name>path</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_loadFileF">
-            <return>bs_String*</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_loadFileChunk">
+        <function name="bs_loadFileChunk" stringFormat="path">
             <return>bs_String*</return>
             <param><type>long</type><name>offset</name></param>
             <param><type>size_t</type><name>size</name></param>
-            <param><type>const char*</type><name>path</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_loadFileChunkF">
-            <return>bs_String*</return>
-            <param><type>long</type><name>offset</name></param>
-            <param><type>size_t</type><name>size</name></param>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+        <function name="bs_deleteFile" stringFormat="path">
+            <return>void</return>
+            <param><type>char*</type><name>path</name></param>
         </function>
-        <function name="bs_deleteFile">
+        <function name="bs_deleteDirectoryContents" stringFormat="path">
             <return>void</return>
             <param><type>const char*</type><name>path</name></param>
         </function>
-        <function name="bs_deleteFileF">
+        <function name="bs_deleteDirectory" stringFormat="path">
             <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_deleteDirectoryContents">
-            <return>void</return>
-            <param><type>const char*</type><name>path</name></param>
-        </function>
-        <function name="bs_deleteDirectoryContentsF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
-        </function>
-        <function name="bs_deleteDirectory">
-            <return>void</return>
-            <param><type>const char*</type><name>path</name></param>
-        </function>
-        <function name="bs_deleteDirectoryF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_directoryExists">
             <return>bool</return>
@@ -3911,32 +3776,20 @@
             <param><type>const char*</type><name>path</name></param>
             <param><type>const char*</type><name>data</name></param>
         </function>
-        <function name="bs_saveFile">
-            <return>void</return>
-            <param><type>const char*</type><name>path</name></param>
-            <param><type>char*</type><name>data</name></param>
-            <param><type>bs_U32</type><name>data_len</name></param>
-        </function>
-        <function name="bs_saveFileF">
+        <function name="bs_saveFile" stringFormat="path">
             <return>void</return>
             <param><type>char*</type><name>data</name></param>
             <param><type>bs_U32</type><name>data_len</name></param>
-            <param><type>char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_convertWin32Path">
             <return>void</return>
             <param><type>char*</type><name>path</name></param>
             <param><type>int</type><name>len</name></param>
         </function>
-        <function name="bs_ensureDirectory">
+        <function name="bs_ensureDirectory" stringFormat="path">
             <return>void</return>
-            <param><type>const char*</type><name>path</name></param>
-        </function>
-        <function name="bs_ensureDirectoryF">
-            <return>void</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_fileModifiedDate">
             <return>bs_DateTime</return>
@@ -3947,10 +3800,9 @@
             <param><type>const char*</type><name>path</name></param>
             <param><type>bs_DateTime*</type><name>date_time</name></param>
         </function>
-        <function name="bs_fileModifiedDateF">
+        <function name="bs_fileModifiedDate" stringFormat="path">
             <return>bs_DateTime</return>
-            <param><type>const char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_fullPath">
             <return>bs_String*</return>
@@ -3962,10 +3814,9 @@
             <return>bool</return>
             <param><type>const char*</type><name>path</name></param>
         </function>
-        <function name="bs_fileExistsF">
+        <function name="bs_fileExists" stringFormat="path">
             <return>bool</return>
-            <param><type>char*</type><name>format</name></param>
-            <param><name>...</name></param>
+            <param><type>char*</type><name>path</name></param>
         </function>
         <function name="bs_toLong">
             <return>bs_I64</return>

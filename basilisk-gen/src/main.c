@@ -19,24 +19,18 @@
     "  the code is regenerated." BSGEN_NEWLINE \
     " */"
 
- /**
-  Includes
-  */
+ /** Includes */
 typedef struct {
     char* file;
 } bsgen_Include;
 
- /**
-  Typedefs
-  */
+ /** Typedefs */
 typedef struct {
     char* type;
     char* name;
 } bsgen_Typedef;
 
- /**
-  Enums
-  */
+ /** Enums */
 typedef struct {
     char* name;
     char* value;
@@ -47,9 +41,7 @@ typedef struct {
     bsgen_List values;
 } bsgen_Enum;
 
- /**
-  Macros
-  */
+ /** Macros */
 typedef struct {
     char* value;
 } bsgen_MacroLine;
@@ -59,9 +51,7 @@ typedef struct {
     bsgen_List lines;
 } bsgen_Macro;
 
- /**
-  Structs
-  */
+ /** Structs */
 typedef struct {
     char* name;
     char* type;
@@ -73,23 +63,20 @@ typedef struct {
     int is_union;
 } bsgen_Structure;
 
- /**
-  Functions
-  */
+ /** Functions */
 typedef struct {
     char* name;
     char* type;
 } bsgen_Param;
 
 typedef struct {
+    char* string_format;
     char* name;
     char* return_value;
     bsgen_List params;
 } bsgen_Function;
 
- /**
-  Externs
-  */
+ /** Externs */
 typedef struct {
     char* type;
     char* name;
@@ -167,7 +154,7 @@ void bsgen_saveFileF(char* data, unsigned int data_len, char* format, ...) {
    * XML Reader
    *============================================================================*/
 
-static char* bsgen_getProperty(xmlNode* node, const char* name) {
+static xmlChar* bsgen_getProperty(xmlNode* node, const char* name) {
     xmlAttr* property = node->properties;
     while (property) {
         if (xmlStrcmp(property->name, name) == 0)
@@ -358,7 +345,7 @@ static bsgen_Param bsgen_readParam(xmlNode* node) {
 }
 
 static void bsgen_readFunction(xmlNode* node, bsgen_Function* out) {
-    char* function_name = bsgen_getProperty(node, "name");
+    xmlChar* function_name = bsgen_getProperty(node, "name");
 
     if (!function_name)
         return;
@@ -368,6 +355,9 @@ static void bsgen_readFunction(xmlNode* node, bsgen_Function* out) {
     if (!return_value)
         return;
 
+    xmlChar* string_format = bsgen_getProperty(node, "stringFormat");
+    if (string_format)
+        out->string_format = xmlStrdup(string_format);
     out->name = xmlStrdup(function_name);
     out->return_value = xmlStrdup(return_value->children->content);
     out->params = BSGEN_LIST(bsgen_Param);
@@ -381,6 +371,17 @@ static void bsgen_readFunction(xmlNode* node, bsgen_Function* out) {
         }
 
         child = child->next;
+    }
+
+    if (out->string_format) {
+        static bsgen_String* string;
+        string = bsgen_stringF(string, "%s_length", out->string_format);
+
+        bsgen_Param param = {
+            .type = "int",
+            .name = strdup(string->value),
+        };
+        bsgen_pushBack(&out->params, &param);
     }
 }
 
@@ -482,7 +483,6 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
     }
 
     string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
-
 
    /**
     Typedefs
@@ -613,8 +613,36 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
    * Trampoline Generation
    *============================================================================*/
 
-static bsgen_String* bsgen_generateTrampolineFunctionBody(bsgen_String* string, bsgen_Function* function, const char* table_name) {
-    string = bsgen_appendStringF(string, "    %s.%s(", table_name, function->name);
+#define BSGEN_END_OF_PARAMETERS ")" BSGEN_NEWLINE "{" BSGEN_NEWLINE
+#define BSGEN_END_OF_FUNCTION "}" BSGEN_NEWLINE BSGEN_NEWLINE
+
+static bsgen_String* bsgen_generateTrampolineFunctionParameter(bsgen_String* string, bsgen_Param* param) {
+    if (param->type)
+        string = bsgen_appendStringF(string, BSGEN_NEWLINE "    %s %s", param->type, param->name);
+    else
+        string = bsgen_appendStringF(string, BSGEN_NEWLINE "    %s", param->name);
+
+    return string;
+}
+
+static bsgen_String* bsgen_generateTrampolineFunctionParameters(bsgen_String* string, bsgen_Function* function) {
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+
+        string = bsgen_generateTrampolineFunctionParameter(string, param);
+        if (i != (function->params.count - 1))
+            string = bsgen_appendString(string, ", ", BSGEN_STRING_LEN(", "));
+    }
+
+    return string;
+}
+
+static bsgen_String* bsgen_generateTrampolineFunctionBody(bsgen_String* string, bsgen_Function* function, const char* table_name, const char* function_name_suffix) {
+    string = bsgen_appendStringF(string, "%s %s%s", function->return_value, function->name, function_name_suffix);
+    string = bsgen_generateTrampolineFunctionParameters(string, function);
+    string = bsgen_appendString(string, BSGEN_END_OF_PARAMETERS, BSGEN_STRING_LEN(BSGEN_END_OF_PARAMETERS));
+
+    string = bsgen_appendStringF(string, "    return %s.%s(", table_name, function->name);
 
     for (int i = 0; i < function->params.count; i++) {
         bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
@@ -625,7 +653,109 @@ static bsgen_String* bsgen_generateTrampolineFunctionBody(bsgen_String* string, 
     }
 
     string = bsgen_appendString(string, ");" BSGEN_NEWLINE, BSGEN_STRING_LEN(");" BSGEN_NEWLINE));
+    string = bsgen_appendString(string, "}" BSGEN_NEWLINE BSGEN_NEWLINE, BSGEN_STRING_LEN("}" BSGEN_NEWLINE BSGEN_NEWLINE));
     
+    return string;
+}
+
+static bsgen_String* bsgen_generateVariadicFormatTrampolineFunctionParametersWithRemaining(bsgen_String* string, bsgen_Function* function) {
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+        if (strcmp(param->name, function->string_format) == 0)
+            break;
+
+        string = bsgen_generateTrampolineFunctionParameter(string, param);
+        string = bsgen_appendString(string, ", ", BSGEN_STRING_LEN(", "));
+    }
+    return string;
+}
+
+static bsgen_String* bsgen_generateVariadicFormatTrampolineFunction(bsgen_String* string, bsgen_Function* function) {
+    string = bsgen_appendStringF(string, "%s %s%c(", function->return_value, function->name, 'V');
+    bsgen_generateVariadicFormatTrampolineFunctionParametersWithRemaining(string, function);
+    string = bsgen_appendStringF(string, "const char* %s_format, va_list args", function->string_format);
+
+    string = bsgen_appendString(string, BSGEN_END_OF_PARAMETERS, BSGEN_STRING_LEN(BSGEN_END_OF_PARAMETERS));
+    string = bsgen_appendStringF(string,
+        "    static bs_String* string;" BSGEN_NEWLINE
+        "    string = bs_stringV(string, %s_format, args);" BSGEN_NEWLINE
+        "    return %sN(",
+        function->string_format,
+        function->name
+    );
+
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+        if (strcmp(param->name, function->string_format) == 0)
+            break;
+        string = bsgen_appendStringF(string, "%s, ", param->name);
+    }
+
+#define BSGEN_END_OF_VARIADIC_FUNCTION "string->value, string->len);" BSGEN_NEWLINE BSGEN_END_OF_FUNCTION
+    string = bsgen_appendString(string, BSGEN_END_OF_VARIADIC_FUNCTION, BSGEN_STRING_LEN(BSGEN_END_OF_VARIADIC_FUNCTION));
+
+    return string;
+}
+
+static bsgen_String* bsgen_generateFormatTrampolineFunction(bsgen_String* string, bsgen_Function* function) {
+    string = bsgen_appendStringF(string, "%s %s%c(", function->return_value, function->name, 'F');
+    bsgen_generateVariadicFormatTrampolineFunctionParametersWithRemaining(string, function);
+
+    string = bsgen_appendStringF(string,
+        "const char* %s_format, ..." BSGEN_END_OF_PARAMETERS
+        "    va_list args;" BSGEN_NEWLINE
+        "    va_start(args, %s_format);" BSGEN_NEWLINE
+        "    %s _return = %sV(",
+        function->string_format,
+        function->string_format,
+        function->return_value,
+        function->name
+    );
+
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+        if (strcmp(param->name, function->string_format) == 0)
+            break;
+        string = bsgen_appendStringF(string, "%s, ", param->name);
+    }
+
+    string = bsgen_appendStringF(string,
+        "%s_format, args"
+        ");" BSGEN_NEWLINE
+        "    va_end(args);" BSGEN_NEWLINE
+        "    return _return;" BSGEN_NEWLINE, 
+        function->string_format);
+
+    string = bsgen_appendString(string, BSGEN_END_OF_FUNCTION, BSGEN_STRING_LEN(BSGEN_END_OF_FUNCTION));
+
+    return string;
+}
+
+static bsgen_String* bsgen_generateStringTrampolineFunction(bsgen_String* string, bsgen_Function* function) {
+    string = bsgen_appendStringF(string, "%s %s(", function->return_value, function->name);
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+
+        string = bsgen_generateTrampolineFunctionParameter(string, param);
+        if (strcmp(param->name, function->string_format) == 0)
+            break;
+
+        if (i != (function->params.count - 1))
+            string = bsgen_appendString(string, ", ", BSGEN_STRING_LEN(", "));
+    }
+
+    string = bsgen_appendString(string, BSGEN_END_OF_PARAMETERS, BSGEN_STRING_LEN(BSGEN_END_OF_PARAMETERS));
+
+    string = bsgen_appendStringF(string, "    return %sN(", function->name);
+    for (int i = 0; i < function->params.count; i++) {
+        bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+        string = bsgen_appendStringF(string, "%s, ", param->name);
+        if (strcmp(param->name, function->string_format) == 0)
+            break;
+    }
+
+    string = bsgen_appendStringF(string, "strlen(%s));" BSGEN_NEWLINE, function->string_format);
+    string = bsgen_appendString(string, BSGEN_END_OF_FUNCTION, BSGEN_STRING_LEN(BSGEN_END_OF_FUNCTION));
     return string;
 }
 
@@ -669,25 +799,16 @@ static bsgen_String* bsgen_generateTrampoline(bsgen_String* string, bsgen_Librar
     */
     for (int i = 0; i < library->functions.count; i++) {
         bsgen_Function* function = bsgen_fetchUnit(&library->functions, i);
-        string = bsgen_appendStringF(string, "%s %s(", function->return_value, function->name);
 
-        for (int j = 0; j < function->params.count; j++) {
-            bsgen_Param* param = bsgen_fetchUnit(&function->params, j);
-
-            if (param->type)
-                string = bsgen_appendStringF(string, BSGEN_NEWLINE "    %s %s", param->type, param->name);
-            else
-                string = bsgen_appendStringF(string, BSGEN_NEWLINE "    %s", param->name);
-
-            if (j != (function->params.count - 1))
-                string = bsgen_appendString(string, ", ", BSGEN_STRING_LEN(", "));
+        if (function->string_format) {
+            string = bsgen_generateTrampolineFunctionBody(string, function, table_name, "N(");
+            string = bsgen_generateStringTrampolineFunction(string, function);
+            string = bsgen_generateVariadicFormatTrampolineFunction(string, function);
+            string = bsgen_generateFormatTrampolineFunction(string, function);
         }
-
-        string = bsgen_appendString(string, ")" BSGEN_NEWLINE "{" BSGEN_NEWLINE, BSGEN_STRING_LEN(")" BSGEN_NEWLINE "{" BSGEN_NEWLINE));
-        string = bsgen_generateTrampolineFunctionBody(string, function, table_name);
-        string = bsgen_appendString(string, "}" BSGEN_NEWLINE, BSGEN_STRING_LEN("}" BSGEN_NEWLINE));
-
-        string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
+        else {
+            string = bsgen_generateTrampolineFunctionBody(string, function, table_name, "(");
+        }
     }
 
     printf("%s" BSGEN_NEWLINE, string->value);
