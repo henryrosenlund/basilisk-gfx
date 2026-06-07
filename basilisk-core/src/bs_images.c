@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 #include <vulkan.h>
 
 static inline bs_U32 bs_queryMemoryType(bs_U32 filter, VkMemoryPropertyFlags props) {

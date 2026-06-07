@@ -15,6 +15,7 @@
 #endif
 
 #include <basilisk.h>s
+#include <bs_internal.h>
 #include <vulkan.h>
 
 bs_List _bs_packages = { 

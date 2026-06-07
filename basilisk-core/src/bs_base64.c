@@ -7,6 +7,7 @@
  */
 
 #include <basilisk.h>
+#include <bs_internal.h>
 #include <string.h>
 
 static const unsigned char base64_table[65] =

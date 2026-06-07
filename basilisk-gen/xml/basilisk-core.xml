@@ -933,11 +933,7 @@
         <macro><name>#define BS_PRINT_MAGENTA_UNDERLINED</name><line>"\033[4;35m"</line></macro>
         <macro><name>#define BS_PRINT_CYAN_UNDERLINED</name><line>"\033[4;36m"</line></macro>
         <macro><name>#define BS_PRINT_WHITE_UNDERLINED</name><line>"\033[4;37m"</line></macro>
-        <macro><name>#define BASILISK_H</name></macro>
         <macro><name>#define BS_VERSION</name><line>"1.0"</line></macro>
-        <macro><name>#define BS_AUDIO_H</name></macro>
-        <macro><name>#define BS_COLLISION_H</name></macro>
-        <macro><name>#define BS_CORE_H</name></macro>
         <macro>
             <name>#define BS_VERTEX_DECLARATION_STRUCTURE(count)</name>
             <line>    struct {</line>
@@ -982,8 +978,6 @@
         <macro><name>#define BS_NUM_CUBE_INDICES</name><line>36</line></macro>
         <macro><name>#define BS_NUM_SLOPE_VERTICES</name><line>24</line></macro>
         <macro><name>#define BS_NUM_SLOPE_INDICES</name><line>24</line></macro>
-        <macro><name>#define BS_ENUMS_H</name></macro>
-        <macro><name>#define BS_FONT_H</name></macro>
         <macro><name>#define BS_TTF_DETAIL</name><line>4</line></macro>
         <macro><name>#define BS_TTF_MAX_PTS</name><line>1024</line></macro>
         <macro><name>#define HEAD_VERSION</name><line>0   // 4 | fixed</line></macro>
@@ -1086,10 +1080,7 @@
         <macro><name>#define KERN_FORMAT0_PAIR_LEFT</name><line>0 // (bs_U16) - The glyph index for the lefthand glyph in the kerning pair.</line></macro>
         <macro><name>#define KERN_FORMAT0_PAIR_RIGHT</name><line>2 // (bs_U16) - The glyph index for the righthand glyph in the kerning pair.</line></macro>
         <macro><name>#define KERN_FORMAT0_PAIR_VALUE</name><line>4 // (bs_I16) - The kerning value in FUnits for the left and right pair in FUnits. If this value is greater than zero, the glyphs are moved apart. If this value is less than zero, the glyphs are moved together.</line></macro>
-        <macro><name>#define BS_IMAGES_H</name></macro>
-        <macro><name>#define BS_INI_H</name></macro>
         <macro><name>#define BS_STRING_GEN_2(TYPE, FUNC, ...)</name><line>{ .size = sizeof(TYPE), .func = #FUNC, __VA_OPT__(.is_required = __VA_ARGS__) },</line></macro>
-        <macro><name>#define BS_INTERNAL_H</name></macro>
         <macro>
             <name>#define BS_PARSE_FORMAT(format, data, len)</name>
             <line>    do {</line>
@@ -1110,24 +1101,6 @@
         <macro><name>#define BSI_LOG_CREATED(text)</name><line>(_bs_args.color_log ? (BS_PRINT_GREEN "+ " BS_PRINT_RESET text) : ("+ " text))</line></macro>
         <macro><name>#define BSI_LOG_ALTERED(text)</name><line>(_bs_args.color_log ? (BS_PRINT_YELLOW "/ " BS_PRINT_RESET text) : ("/ " text))</line></macro>
         <macro><name>#define BSI_LOG_DELETED(text)</name><line>(_bs_args.color_log ? (BS_PRINT_RED "- " BS_PRINT_RESET text) : ("- " text))</line></macro>
-        <macro>
-            <name>#define BS_FOREACH_PROC(X)</name>
-            <line>    X(PFN_vkCmdInsertDebugUtilsLabelEXT, vkCmdInsertDebugUtilsLabelEXT)</line>
-            <line>    X(PFN_vkCmdBeginDebugUtilsLabelEXT, vkCmdBeginDebugUtilsLabelEXT)</line>
-            <line>    X(PFN_vkCmdEndDebugUtilsLabelEXT, vkCmdEndDebugUtilsLabelEXT)</line>
-            <line>    X(PFN_vkCmdBeginRenderingKHR, vkCmdBeginRenderingKHR)</line>
-            <line>    X(PFN_vkCmdEndRenderingKHR, vkCmdEndRenderingKHR)</line>
-            <line>    X(PFN_vkCmdTraceRaysKHR, vkCmdTraceRaysKHR)</line>
-            <line>    X(PFN_vkGetAccelerationStructureBuildSizesKHR, vkGetAccelerationStructureBuildSizesKHR)</line>
-            <line>    X(PFN_vkCreateAccelerationStructureKHR, vkCreateAccelerationStructureKHR)</line>
-            <line>    X(PFN_vkCmdBuildAccelerationStructuresKHR, vkCmdBuildAccelerationStructuresKHR)</line>
-            <line>    X(PFN_vkGetAccelerationStructureDeviceAddressKHR, vkGetAccelerationStructureDeviceAddressKHR)</line>
-            <line>    X(PFN_vkGetRayTracingShaderGroupHandlesKHR, vkGetRayTracingShaderGroupHandlesKHR)</line>
-            <line>    X(PFN_vkDestroyAccelerationStructureKHR, vkDestroyAccelerationStructureKHR)</line>
-            <line>    X(PFN_vkCreateRayTracingPipelinesKHR, vkCreateRayTracingPipelinesKHR)</line>
-        </macro>
-        <macro><name>#define BS_STRUCT_GEN(TYPE, FUNC, ...)</name><line>TYPE FUNC;</line></macro>
-        <macro><name>#define BS_JSON_H</name></macro>
         <macro><name>#define BS_JSON_PRETTY</name><line>(1 &lt;&lt; 0)</line></macro>
         <macro><name>#define BS_JSON_ESCAPE_UNICODE</name><line>(1 &lt;&lt; 1)</line></macro>
         <macro><name>#define BS_JSON_ESCAPE_SLASHES</name><line>(1 &lt;&lt; 2)</line></macro>
@@ -1176,7 +1149,6 @@
             <line>			_obj;</line>
             <line>		})</line>
         </macro>
-        <macro><name>#define BS_LOG_H</name></macro>
         <macro><name>#define BS_ALL_EXCEPTIONS</name><line>0xFFFFFFFFFFFFFFFF</line></macro>
         <macro><name>#define BS_ERROR_HEADER</name><line>BS_PRINT_COLOR("[ERR] ", BS_PRINT_RED)</line></macro>
         <macro><name>#define BS_WARN_HEADER</name><line>BS_PRINT_COLOR("[WRN] ", BS_PRINT_YELLOW)</line></macro>
@@ -1255,13 +1227,10 @@
             <line>				);</line>
             <line>        } while (0)</line>
         </macro>
-        <macro><name>#define BS_MEM_H</name></macro>
         <macro>
             <name>#define BS_STACK_LIST(type, c)</name>
             <line>    { .capacity = c, .data = _alloca(c * sizeof(type)), .unit_size = sizeof(type) }</line>
         </macro>
-        <macro><name>#define BS_MODELS_H</name></macro>
-        <macro><name>#define BS_OBJECTS_H</name></macro>
         <macro><name>#define BS_SWAP_SIZE(type)</name><line>(sizeof(*((type*)NULL)->_))</line></macro>
         <macro><name>#define BS_SWAPS_COUNT(flags)</name><line>((flags &amp; BS_OBJECT_HAS_SWAPS_BIT) ? bs_settings()->frames_in_flight : 1)</line></macro>
         <macro>
@@ -1282,8 +1251,6 @@
         <macro><name>#define BS_QUERY_FORCE_CREATE</name><line>(1 &lt;&lt; 31)</line></macro>
         <macro><name>#define BS_QUERY_ALLOW_NULL</name><line>(1 &lt;&lt; 30)</line></macro>
         <macro><name>#define BS_QUERY_MODEL_KEEP_JSON</name><line>(1 &lt;&lt; 29)</line></macro>
-        <macro><name>#define BS_SHADERS_H</name></macro>
-        <macro><name>#define BS_TYPES_H</name></macro>
         <macro><name>#define BSAPI</name><line>_declspec(dllexport)</line></macro>
         <macro><name>#define BS_BLANK</name><line>(bs_RGBA) {   0,   0,   0,   0 }</line></macro>
         <macro><name>#define BS_BLACK</name><line>(bs_RGBA) {   0,   0,   0, 255 }</line></macro>
@@ -1297,7 +1264,6 @@
         <macro><name>#define BS_ATLAS_TEXTURE_HAS_ALPHA</name><line>(1 &lt;&lt; 0)</line></macro>
         <macro><name>#define BS_ATLAS_TEXTURE_IS_SOLID</name><line>(1 &lt;&lt; 1)</line></macro>
         <macro><name>#define BS_RENDERER_SUBPASS_HAS_DEPTH(flags, subpass)</name><line>(flags &amp; (1 &lt;&lt; subpass))</line></macro>
-        <macro><name>#define BS_WINDOW_H</name></macro>
         <macro><name>#define BS_SET_BIT(array, index)</name><line>((array)[(index) / 8] |=  (1 &lt;&lt; ((index) % 8)))</line></macro>
         <macro><name>#define BS_CLEAR_BIT(array, index)</name><line>((array)[(index) / 8] &amp;= ~(1 &lt;&lt; ((index) % 8)))</line></macro>
         <macro><name>#define BS_GET_BIT(array, index)</name><line>(((array)[(index) / 8] >> ((index) % 8)) &amp; 1)</line></macro>
@@ -1558,6 +1524,7 @@
             <field><type>int</type><name>source_id</name></field>
         </structure>
         <structure name="bs_Object">
+            <field><type>bs_Header*</type><name>head</name></field>
             <field><type>bs_U32</type><name>flags</name></field>
         </structure>
         <structure name="bs_ResourceParams">
@@ -1736,6 +1703,11 @@
             <field><type>int</type><name>constant_size</name></field>
             <field><type>bs_Resource*</type><name>resource</name></field>
         </structure>
+		<structure name="bs_BufferSwap">
+            <field><type>struct VkBuffer_T*</type><name>vk_buffer</name></field>
+            <field><type>struct VkDeviceMemory_T*</type><name>memory</name></field>
+            <field><type>char*</type><name>data</name></field>
+        </structure>
         <structure name="bs_Buffer">
             <field><type>bs_Header</type><name>head</name></field>
             <field><type>bs_BufferBits</type><name>flags</name></field>
@@ -1744,6 +1716,7 @@
             <field><type>bs_U32</type><name>num_bytes</name></field>
             <field><type>bs_BufferUsageFlags</type><name>usage_flags</name></field>
             <field><type>bs_MemoryPropertyFlags</type><name>memory_flags</name></field>
+            <field><type>bs_BufferSwap</type><name>_[]</name></field>
         </structure>
         <structure name="bs_Output">
             <field><type>bs_OutputFlags</type><name>flags</name></field>
@@ -2321,9 +2294,6 @@
             <field><type>long</type><name>high_part</name></field>
             <field><type>long long</type><name>quad_part</name></field>
         </structure>
-		<structure name="bs_Procs">
-			<field><type></type><name>BS_FOREACH_PROC(BS_STRUCT_GEN)</name></field>
-		</structure>
     </structures>
 
 	<externs>

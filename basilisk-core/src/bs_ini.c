@@ -8,6 +8,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 
 const char* validation_layers[] = {
     "VK_LAYER_KHRONOS_validation"

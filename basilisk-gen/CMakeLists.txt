@@ -7,7 +7,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 file(GLOB_RECURSE HEADER_FILES "include/*.h")
-file(GLOB_RECURSE XML_FILES "xml/*.xml")
+file(GLOB_RECURSE XML_FILES "xml/*.xml" "xml/*.xslt")
 
 add_executable(${PROJECT_NAME}
     ${SOURCE_FILES}
@@ -24,15 +24,19 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/external/
     ${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/include
     ${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/build
+    ${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/
+    ${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/build
 )
 
 target_link_directories(${PROJECT_NAME} PRIVATE 
     ${CMAKE_SOURCE_DIR}/external/
     ${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/build/Release
+    ${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/win32/bin.msvc
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-	libxml2
+	libxslt
+    libxml2
 )
 
 #target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -73,6 +77,10 @@ add_custom_command(
 	CONFIGURATIONS RelWithDebInfo
 )
 
+SET(COPY_LIBXSLT_DLL_DEBUG ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/win32/bin.msvc/libxslt.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/Debug/")
+SET(COPY_LIBXSLT_DLL_RELEASE ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/win32/bin.msvc/libxslt.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/Release")
+SET(COPY_LIBXSLT_DLL_RELEASE_DEBUG ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxslt-v1.1.45/win32/bin.msvc/libxslt.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/RelWithDebInfo")
+
 SET(COPY_LIBXML2_DLL_DEBUG ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/build/Release/libxml2.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/Debug/")
 SET(COPY_LIBXML2_DLL_RELEASE ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/build/Release/libxml2.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/Release")
 SET(COPY_LIBXML2_DLL_RELEASE_DEBUG ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/external/libxml2-2.15.3/build/Release/libxml2.dll" "${CMAKE_SOURCE_DIR}/build/${PROJECT_NAME}/RelWithDebInfo")
@@ -93,6 +101,7 @@ SET(COPY_LICENSE_RELEASE_DEBUG ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/LIC
 add_custom_command(
     TARGET ${PROJECT_NAME} 
     POST_BUILD
+    COMMAND "$<$<CONFIG:Debug>:${COPY_LIBXSLT_DLL_DEBUG}>" COMMENT "POST_BUILD: Copying libxslt.dll/"
     COMMAND "$<$<CONFIG:Debug>:${COPY_LIBXML2_DLL_DEBUG}>" COMMENT "POST_BUILD: Copying libxml2.dll/"
     COMMAND "$<$<CONFIG:Debug>:${COPY_ICONV_DLL_DEBUG}>" COMMENT "POST_BUILD: Copying iconv-2.dll/"
     COMMAND "$<$<CONFIG:Debug>:${XML_LINK}>" COMMENT "POST_BUILD: Creating junction for xml/"
@@ -104,6 +113,7 @@ add_custom_command(
 add_custom_command(
     TARGET ${PROJECT_NAME} 
     POST_BUILD
+    COMMAND "$<$<CONFIG:Release>:${COPY_LIBXSLT_DLL_RELEASE}>" COMMENT "POST_BUILD: Copying libxslt.dll/"
     COMMAND "$<$<CONFIG:Release>:${COPY_LIBXML2_DLL_RELEASE}>" COMMENT "POST_BUILD: Copying libxml2.dll/"
     COMMAND "$<$<CONFIG:Release>:${COPY_ICONV_DLL_RELEASE}>" COMMENT "POST_BUILD: Copying iconv-2.dll/"
     COMMAND "$<$<CONFIG:Release>:${COPY_XML_RELEASE}>" COMMENT "POST_BUILD: Copying xml/"
@@ -115,6 +125,7 @@ add_custom_command(
 add_custom_command(
     TARGET ${PROJECT_NAME} 
     POST_BUILD
+    COMMAND "$<$<CONFIG:RelWithDebInfo>:${COPY_LIBXSLT_DLL_RELEASE_DEBUG}>" COMMENT "POST_BUILD: Copying libxslt.dll/"
     COMMAND "$<$<CONFIG:RelWithDebInfo>:${COPY_LIBXML2_DLL_RELEASE_DEBUG}>" COMMENT "POST_BUILD: Copying libxml2.dll/"
     COMMAND "$<$<CONFIG:RelWithDebInfo>:${COPY_ICONV_DLL_RELEASE_DEBUG}>" COMMENT "POST_BUILD: Copying iconv-2.dll/"
     COMMAND "$<$<CONFIG:RelWithDebInfo>:${COPY_XML_RELEASE_DEBUG}>" COMMENT "POST_BUILD: Copying xml/"

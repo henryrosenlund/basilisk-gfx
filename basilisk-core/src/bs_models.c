@@ -12,6 +12,7 @@
 #include <direct.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 
 
 

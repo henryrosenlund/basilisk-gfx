@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 #include <yyjson.h>
 
 bs_Json bs_jsonRoot(bs_Json* json, bs_JsonObject obj) {

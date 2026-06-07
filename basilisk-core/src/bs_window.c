@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
 #include <vssym32.h>

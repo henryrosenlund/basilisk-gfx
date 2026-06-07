@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include <basilisk.h>
+#include <bs_internal.h>
 #include <vulkan.h>
 
 struct bs_List bs_pipelines[BS_PIPELINE_TYPE_COUNT] = {0};

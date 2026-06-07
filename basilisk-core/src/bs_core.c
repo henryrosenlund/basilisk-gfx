@@ -1,4 +1,5 @@
 #include <basilisk.h>
+#include <bs_internal.h>
 
 #include <stdio.h>
 #include <string.h>

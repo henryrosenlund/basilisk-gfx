@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libxml/parser.h>
+#include <libxslt/xslt.h>
+#include <libxslt/transform.h>
 #include <stdio.h>
 
 #include <bsgen_string.h>
@@ -489,7 +491,26 @@ static void bsgen_readFunctions(bsgen_List* list, xmlNode* node, const char* typ
     }
 }
 
-static bsgen_Library bsgen_readLibrary(const char* path) {
+static xmlDoc* bsgen_applyXSLT(xmlDoc* doc, const char* path) {
+    xsltStylesheetPtr xslt = xsltParseStylesheetFile(path);
+    if (!xslt) {
+        bsgen_warning("Failed to parse XSLT stylesheet \"%s\"\n", path);
+        return doc;
+    }
+
+    xmlDoc* result = xsltApplyStylesheet(xslt, doc, NULL);
+    xsltFreeStylesheet(xslt);
+
+    if (!result) {
+        bsgen_warning("Failed to apply XSLT stylesheet\n");
+        return doc;
+    }
+
+    xmlFreeDoc(doc);
+    return result;
+}
+
+static bsgen_Library bsgen_readLibrary(const char* path, const char* xslt_path) {
     bsgen_Library library = {
         .path = path,
         .includes = BSGEN_LIST(bsgen_Include),
@@ -502,6 +523,8 @@ static bsgen_Library bsgen_readLibrary(const char* path) {
     };
 
     xmlDoc* document = xmlReadFile(path, NULL, 0);
+    if (xslt_path)
+        document = bsgen_applyXSLT(document, xslt_path);
     xmlNode* node = xmlDocGetRootElement(document)->children;
 
     while (node) {
@@ -589,7 +612,8 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         string = bsgen_appendStringF(string, "#include <%s>" BSGEN_NEWLINE, include->file);
     }
 
-    string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
+    if (library->includes.count > 0)
+        string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
 
    /**
     Definitions
@@ -606,7 +630,8 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         string = bsgen_appendStringF(string, "typedef enum %s %s;" BSGEN_NEWLINE, _enum->name, _enum->name);
     }
 
-    string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
+    if (library->enums.count > 0)
+        string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
 
 
    /**
@@ -640,7 +665,8 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         string = bsgen_appendStringF(string, "typedef %s %s;" BSGEN_NEWLINE, _typedef->type, _typedef->name);
     }
 
-    string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
+    if (library->typedefs.count > 0)
+        string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
 
     /**
      Declarations
@@ -718,7 +744,10 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         string = bsgen_appendStringF(string, "%s extern %s _%s;" BSGEN_NEWLINE, api_prefix, ext->type, ext->name);
     }
 
-    string = bsgen_appendStringF(string, BSGEN_NEWLINE "#endif");
+    if (library->externs.count > 0)
+        string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
+
+    string = bsgen_appendString(string, "#endif", BSGEN_STRING_LEN("#endif"));
 
     bsgen_saveFileF(string->value, string->len, "%s%s", output_path, name);
 
@@ -945,16 +974,23 @@ static bsgen_String* bsgen_indentLicense(bsgen_String* license) {
 }
 
 int main(int argc, const char* argv[]) {
+    xsltInit();
+
     bsgen_String* license = bsgen_loadFile("LICENSE");
     bsgen_String* license_indented = bsgen_indentLicense(license);
 
-    bsgen_Library basilisk_core = bsgen_readLibrary("xml/basilisk-core.xml");
+    bsgen_Library basilisk_core = bsgen_readLibrary("xml/basilisk-core.xml", "xml/basilisk-core.xslt");
+    bsgen_Library basilisk_core_internal = bsgen_readLibrary("xml/basilisk-core-internal.xml", NULL);
 
     bsgen_String* string = NULL;
 
     string = bsgen_string(string, "", 0);
     string = bsgen_appendLicense(string, license_indented);
     string = bsgen_generateHeader(string, &basilisk_core, "basilisk.h", "BASILISK_H", "BSAPI", BSGEN_OUTPUT_PATH);
+
+    string = bsgen_string(string, "", 0);
+    string = bsgen_appendLicense(string, license_indented);
+    string = bsgen_generateHeader(string, &basilisk_core_internal, "bs_internal.h", "BS_INTERNAL_H", "", BSGEN_OUTPUT_PATH);
 
     string = bsgen_string(string, "", 0);
     string = bsgen_appendLicense(string, license_indented);

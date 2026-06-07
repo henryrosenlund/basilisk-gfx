@@ -14,6 +14,7 @@
 #endif
 
 #include <basilisk.h>s
+#include <bs_internal.h>
 #include <vulkan.h>
 
 bs_Scope bs_scope;
