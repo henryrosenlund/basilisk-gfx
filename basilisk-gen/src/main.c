@@ -57,6 +57,7 @@ typedef struct {
 typedef struct {
     char* name;
     char* type;
+    bsgen_List fields;
 } bsgen_Field;
 
 typedef struct {
@@ -208,7 +209,7 @@ static void bsgen_readTypedef(xmlNode* node, bsgen_Typedef* out) {
     xmlNode* name_node = bsgen_getSingleChild(node, "name");
 
     if (!type_node || !name_node)
-        return (bsgen_Field) { 0 };
+        return;
 
     out->name = xmlStrdup(name_node->children->content);
     out->type = xmlStrdup(type_node->children->content);
@@ -239,8 +240,10 @@ static bsgen_EnumValue bsgen_readEnumValue(xmlNode* node) {
 static void bsgen_readEnum(xmlNode* node, bsgen_Enum* out) {
     char* name = bsgen_getProperty(node, "name");
 
-    if (!name)
-        return bsgen_warning("Name is a required property of \"%s\"\n", node->name);
+    if (!name) {
+        bsgen_warning("Name is a required property of \"%s\"\n", node->name);
+        return;
+    }
     
     out->name = name;
     out->values = BSGEN_LIST(bsgen_EnumValue);
@@ -265,8 +268,10 @@ static void bsgen_readEnum(xmlNode* node, bsgen_Enum* out) {
 static void bsgen_readMacro(xmlNode* node, bsgen_Macro* out) {
     xmlNode* name_node = bsgen_getSingleChild(node, "name");
 
-    if (!name_node)
-        return bsgen_warning("Name is a required property of \"%s\"\n", node->name);
+    if (!name_node) {
+        bsgen_warning("Name is a required property of \"%s\"\n", node->name);
+        return;
+    }
 
     out->name = xmlStrdup(name_node->children->content);
     out->lines = BSGEN_LIST(bsgen_MacroLine);
@@ -296,13 +301,27 @@ static bsgen_Field bsgen_readField(xmlNode* node) {
     xmlNode* type_node = bsgen_getSingleChild(node, "type");
     xmlNode* name_node = bsgen_getSingleChild(node, "name");
 
-    if (!type_node || !name_node)
-        return (bsgen_Field) { 0 };
+   // if (!type_node || !name_node) {
+   //     bsgen_warning("Type and name are required properties of \"%s\"\n", node->name);
+   //     return (bsgen_Field) { 0 };
+   // }
 
     bsgen_Field field = {
-        .name = xmlStrdup(name_node->children->content),
-        .type = type_node->children ? xmlStrdup(type_node->children->content) : NULL,
+        .name = name_node && name_node->children ? xmlStrdup(name_node->children->content) : NULL,
+        .type = type_node && type_node->children ? xmlStrdup(type_node->children->content) : NULL,
+        .fields = BSGEN_LIST(bsgen_Field),
     };
+    
+    while (child) {
+        if (child->type == XML_ELEMENT_NODE) {
+            if (xmlStrcmp(child->name, "field") == 0) {
+                bsgen_Field sub_field = bsgen_readField(child);
+                bsgen_pushBack(&field.fields, &sub_field);
+            }
+        }
+
+        child = child->next;
+    }
 
     return field;
 }
@@ -420,8 +439,10 @@ static void bsgen_readExtern(xmlNode* node, bsgen_Extern* out) {
     xmlNode* type = bsgen_getSingleChild(node, "type");
     xmlNode* name = bsgen_getSingleChild(node, "name");
 
-    if (!type || !name)
-        return bsgen_warning("Type and name are required properties of \"%s\"\n", node->name);
+    if (!type || !name) {
+        bsgen_warning("Type and name are required properties of \"%s\"\n", node->name);
+        return;
+    }
 
     out->type = xmlStrdup(type->children->content);
     out->name = xmlStrdup(name->children->content);
@@ -522,6 +543,41 @@ static bsgen_String* bsgen_appendHeaderDefines(bsgen_String* string, const char*
   * Header Generation
   *============================================================================*/
 
+static bsgen_String* bsgen_appendIndents(bsgen_String* string, int indent) {
+    for (int i = 0; i < indent; i++)
+        string = bsgen_appendString(string, "    ", 4);
+    return string;
+}
+
+static bsgen_String* bsgen_generateFieldDeclaration(bsgen_String* string, bsgen_Field* field, int indent) {
+    string = bsgen_appendIndents(string, indent);
+
+    if (field->fields.count > 0) {
+        indent++;
+
+        string = bsgen_appendStringF(string, "struct {;" BSGEN_NEWLINE, field->name);
+        for (int i = 0; i < field->fields.count; i++) {
+            bsgen_Field* sub_field = bsgen_fetchUnit(&field->fields, i);
+            string = bsgen_generateFieldDeclaration(string, sub_field, indent);
+        }
+
+        string = bsgen_appendIndents(string, --indent);
+        string = bsgen_appendChar(string, '}');
+    }
+
+    if (field->type) {
+        string = bsgen_appendString(string, field->type, strlen(field->type));
+        string = bsgen_appendChar(string, ' ');
+    }
+
+    if (field->name)
+        string = bsgen_appendString(string, field->name, strlen(field->name));
+
+    string = bsgen_appendString(string, ";" BSGEN_NEWLINE, BSGEN_STRING_LEN(";" BSGEN_NEWLINE));
+
+    return string;
+}
+
 static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* library, const char* name, const char* header_id, const char* api_prefix, const char* output_path) {
     string = bsgen_appendHeaderDefines(string, header_id);
 
@@ -595,10 +651,7 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         
         for (int j = 0; j < structure->fields.count; j++) {
             bsgen_Field* field = bsgen_fetchUnit(&structure->fields, j);
-            if (field->type)
-                string = bsgen_appendStringF(string, "    %s %s;" BSGEN_NEWLINE, field->type, field->name);
-            else
-                string = bsgen_appendStringF(string, "    %s;" BSGEN_NEWLINE, field->name);
+            string = bsgen_generateFieldDeclaration(string, field, 1);
         }
 
 #define BSGEN_STRUCT_END "};" BSGEN_NEWLINE BSGEN_NEWLINE

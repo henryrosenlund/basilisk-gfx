@@ -2675,25 +2675,31 @@ struct bs_Settings {
 
 union bs_vec2 {
     float a[2];
-    float x;
-    float y;
+    struct {;
+        float x;
+        float y;
+    };
 };
 
 union bs_vec3 {
     float a[3];
-    float x;
-    float y;
-    float z;
+    struct {;
+        float x;
+        float y;
+        float z;
+    };
     bs_vec2 xy;
     bs_vec2 yz;
 };
 
 union bs_vec4 {
     float a[4];
-    float x;
-    float y;
-    float z;
-    float w;
+    struct {;
+        float x;
+        float y;
+        float z;
+        float w;
+    };
     bs_vec2 xy;
     bs_vec2 zw;
     bs_vec3 xyz;
@@ -2701,25 +2707,31 @@ union bs_vec4 {
 
 union bs_ivec2 {
     int a[2];
-    int x;
-    int y;
+    struct {;
+        int x;
+        int y;
+    };
 };
 
 union bs_ivec3 {
     int a[3];
-    int x;
-    int y;
-    int z;
+    struct {;
+        int x;
+        int y;
+        int z;
+    };
     bs_ivec2 xy;
     bs_ivec2 yz;
 };
 
 union bs_ivec4 {
     int a[4];
-    int x;
-    int y;
-    int z;
-    int w;
+    struct {;
+        int x;
+        int y;
+        int z;
+        int w;
+    };
     bs_ivec2 xy;
     bs_ivec2 zw;
     bs_ivec3 xyz;
@@ -2750,18 +2762,22 @@ union bs_mat4x3 {
 };
 
 union bs_RGBA {
-    unsigned char r;
-    unsigned char g;
-    unsigned char b;
-    unsigned char a;
+    struct {;
+        unsigned char r;
+        unsigned char g;
+        unsigned char b;
+        unsigned char a;
+    };
     bs_U32 hex;
     unsigned char array[4];
 };
 
 union bs_RGB {
-    unsigned char r;
-    unsigned char g;
-    unsigned char b;
+    struct {;
+        unsigned char r;
+        unsigned char g;
+        unsigned char b;
+    };
     bs_U32 hex;
 };
 

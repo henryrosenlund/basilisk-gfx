@@ -2222,47 +2222,59 @@
         </structure>
         <structure type="union" name="bs_vec2">
             <field><type>float</type><name>a[2]</name></field>
-            <field><type>float</type><name>x</name></field>
-            <field><type>float</type><name>y</name></field>
-        </structure>
+			<field>
+				<field><type>float</type><name>x</name></field>
+                <field><type>float</type><name>y</name></field>
+			</field>
+		</structure>
         <structure type="union" name="bs_vec3">
             <field><type>float</type><name>a[3]</name></field>
-            <field><type>float</type><name>x</name></field>
-            <field><type>float</type><name>y</name></field>
-            <field><type>float</type><name>z</name></field>
+			<field>
+                <field><type>float</type><name>x</name></field>
+                <field><type>float</type><name>y</name></field>
+                <field><type>float</type><name>z</name></field>
+			</field>
             <field><type>bs_vec2</type><name>xy</name></field>
             <field><type>bs_vec2</type><name>yz</name></field>
         </structure>
         <structure type="union" name="bs_vec4">
             <field><type>float</type><name>a[4]</name></field>
-            <field><type>float</type><name>x</name></field>
-            <field><type>float</type><name>y</name></field>
-            <field><type>float</type><name>z</name></field>
-            <field><type>float</type><name>w</name></field>
+			<field>
+                <field><type>float</type><name>x</name></field>
+                <field><type>float</type><name>y</name></field>
+                <field><type>float</type><name>z</name></field>
+                <field><type>float</type><name>w</name></field>
+			</field>
             <field><type>bs_vec2</type><name>xy</name></field>
             <field><type>bs_vec2</type><name>zw</name></field>
             <field><type>bs_vec3</type><name>xyz</name></field>
         </structure>
         <structure type="union" name="bs_ivec2">
             <field><type>int</type><name>a[2]</name></field>
-            <field><type>int</type><name>x</name></field>
-            <field><type>int</type><name>y</name></field>
+			<field>
+				<field><type>int</type><name>x</name></field>
+                <field><type>int</type><name>y</name></field>
+			</field>
         </structure>
         <structure type="union" name="bs_ivec3">
             <field><type>int</type><name>a[3]</name></field>
-            <field><type>int</type><name>x</name></field>
-            <field><type>int</type><name>y</name></field>
-            <field><type>int</type><name>z</name></field>
-            <field><type>bs_ivec2</type><name>xy</name></field>
+			<field>
+				<field><type>int</type><name>x</name></field>
+                <field><type>int</type><name>y</name></field>
+                <field><type>int</type><name>z</name></field>
+			</field>
+			<field><type>bs_ivec2</type><name>xy</name></field>
             <field><type>bs_ivec2</type><name>yz</name></field>
         </structure>
         <structure type="union" name="bs_ivec4">
             <field><type>int</type><name>a[4]</name></field>
-            <field><type>int</type><name>x</name></field>
-            <field><type>int</type><name>y</name></field>
-            <field><type>int</type><name>z</name></field>
-            <field><type>int</type><name>w</name></field>
-            <field><type>bs_ivec2</type><name>xy</name></field>
+			<field>
+				<field><type>int</type><name>x</name></field>
+                <field><type>int</type><name>y</name></field>
+                <field><type>int</type><name>z</name></field>
+                <field><type>int</type><name>w</name></field>
+			</field>
+			<field><type>bs_ivec2</type><name>xy</name></field>
             <field><type>bs_ivec2</type><name>zw</name></field>
             <field><type>bs_ivec3</type><name>xyz</name></field>
         </structure>
@@ -2287,18 +2299,22 @@
             <field><type>float</type><name>a[4][3]</name></field>
         </structure>
         <structure type="union" name="bs_RGBA">
-            <field><type>unsigned char</type><name>r</name></field>
-            <field><type>unsigned char</type><name>g</name></field>
-            <field><type>unsigned char</type><name>b</name></field>
-            <field><type>unsigned char</type><name>a</name></field>
+			<field>
+				<field><type>unsigned char</type><name>r</name></field>
+                <field><type>unsigned char</type><name>g</name></field>
+                <field><type>unsigned char</type><name>b</name></field>
+                <field><type>unsigned char</type><name>a</name></field>
+			</field>
             <field><type>bs_U32</type><name>hex</name></field>
             <field><type>unsigned char</type><name>array[4]</name></field>
         </structure>
         <structure type="union" name="bs_RGB">
-            <field><type>unsigned char</type><name>r</name></field>
-            <field><type>unsigned char</type><name>g</name></field>
-            <field><type>unsigned char</type><name>b</name></field>
-            <field><type>bs_U32</type><name>hex</name></field>
+			<field>
+			    <field><type>unsigned char</type><name>r</name></field>
+                <field><type>unsigned char</type><name>g</name></field>
+                <field><type>unsigned char</type><name>b</name></field>
+			</field>
+			<field><type>bs_U32</type><name>hex</name></field>
         </structure>
         <structure type="union" name="bs_BigInt">
             <field><type>unsigned long</type><name>low_part</name></field>

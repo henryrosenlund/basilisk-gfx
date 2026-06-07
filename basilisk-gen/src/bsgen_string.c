@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <inttypes.h>
 
 #define BSGEN_STRING_OVERHEAD (1024)
 

@@ -19,6 +19,7 @@ source_group("Header Files" FILES ${HEADER_FILES})
 target_include_directories(${PROJECT_NAME} PRIVATE
     include/
     ${CMAKE_SOURCE_DIR}/external/
+    ${CMAKE_SOURCE_DIR}/external/cglm-0.9.6/include
     ${CMAKE_SOURCE_DIR}/external/vulkan
 )
 
