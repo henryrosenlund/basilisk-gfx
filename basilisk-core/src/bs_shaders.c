@@ -1,16 +1,3 @@
-#include <bs_mem.h>
-#include <bs_math.h>
-#include <bs_core.h>
-#include <bs_shaders.h>
-#include <bs_images.h>
-#include <bs_ini.h>
-#include <bs_types.h>
-#include <bs_log.h>
-#include <bs_json.h>
-#include <bs_base64.h>
-#include <bs_window.h>
-#include <bs_internal.h>
-
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +6,7 @@
 #include <assert.h>
 #include <inttypes.h>
 
+#include <basilisk.h>
 #include <vulkan.h>
 
 struct bs_List bs_pipelines[BS_PIPELINE_TYPE_COUNT] = {0};
@@ -857,9 +845,9 @@ void bs_pushConstant(bs_Pipeline* pipeline, bs_U32 offset, bs_U32 size, void* da
     if ((offset + size) > pipeline->constant_size)
         return bs_throwBasiliskF(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS, "Pipeline " BS_PRINT_COLOR("%" PRIx64, BS_PRINT_BLUE_BRIGHT) "\nPush Constant\n%d + %d > %d", pipeline->hash, offset, size, pipeline->constant_size);
     vkCmdPushConstants(command_buffer, pipeline->layout, pipeline->shader_stages, offset, size, data);
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -1045,15 +1033,15 @@ bs_Pipeline* bs_pipeline(bs_PipelineHash* descriptor) {
     if (bs_pipelines[BS_PIPELINE_GRAPHICS].capacity == 0)
         bs_pipelines[BS_PIPELINE_GRAPHICS] = bs_list(sizeof(bs_Pipeline*), 64);
 
-    if (!bs_scope.renderer) {
+    if (!_bs_scope.renderer) {
         bs_throwBasiliskF(BSX_INVALID_STATE, "Pipelines must be created within a renderer");
         return NULL;
     }
 
-    bool is_dynamic_renderer = bs_rendererIsDynamic(bs_scope.renderer);
+    bool is_dynamic_renderer = bs_rendererIsDynamic(_bs_scope.renderer);
 
-    descriptor->subpass = bs_scope.subpass;
-    descriptor->renderer = bs_scope.renderer;
+    descriptor->subpass = _bs_scope.subpass;
+    descriptor->renderer = _bs_scope.renderer;
 
     bs_Shader* vs = descriptor->shaders[0];
     bs_Shader* fs = descriptor->shaders[1];
@@ -1100,17 +1088,17 @@ bs_Pipeline* bs_pipeline(bs_PipelineHash* descriptor) {
 
     int num_blend_states = 0;
     if (!is_dynamic_renderer) {
-        if (descriptor->subpass >= bs_scope.renderer->num_subpasses)
+        if (descriptor->subpass >= _bs_scope.renderer->num_subpasses)
             bs_throwBasiliskF(BSXI_INTERNAL | BSX_OUT_OF_BOUNDS, "Pipeline subpass (%d) falls outside (%d) renderer %s(%s)%s's subpass count (%d)",
                 descriptor->subpass,
-                bs_scope.renderer->head.id,
+                _bs_scope.renderer->head.id,
                 (_bs_args.color_log ? BS_PRINT_CYAN : ""),
-                bs_idName(bs_scope.renderer->head.source_id, bs_scope.renderer->head.id),
+                bs_idName(_bs_scope.renderer->head.source_id, _bs_scope.renderer->head.id),
                 (_bs_args.color_log ? BS_PRINT_RESET : ""),
-                bs_scope.renderer->num_subpasses);
+                _bs_scope.renderer->num_subpasses);
 
-        for (int i = 0; i < bs_scope.renderer->num_outputs; i++) {
-            bs_Output* output = bs_scope.renderer->outputs + i;
+        for (int i = 0; i < _bs_scope.renderer->num_outputs; i++) {
+            bs_Output* output = _bs_scope.renderer->outputs + i;
             if (output->subpass != descriptor->subpass)
                 continue;
             if (bs_isDepthFormat(output->image->format))
@@ -1132,8 +1120,8 @@ bs_Pipeline* bs_pipeline(bs_PipelineHash* descriptor) {
         }
     }
     else {
-        for (int i = 0; i < bs_scope.renderer->num_outputs; i++) {
-            bs_Output* output = bs_scope.renderer->outputs + i;
+        for (int i = 0; i < _bs_scope.renderer->num_outputs; i++) {
+            bs_Output* output = _bs_scope.renderer->outputs + i;
             if (bs_isDepthFormat(output->image->format)) {
                 render_info.depthAttachmentFormat = output->image->format; // TODO: ensure only one?
             }
@@ -1287,7 +1275,7 @@ bs_Pipeline* bs_pipeline(bs_PipelineHash* descriptor) {
         pipeline_ci.pMultisampleState = &multisampling_ci;
         pipeline_ci.pColorBlendState = &color_blending_ci;
         if (!is_dynamic_renderer)
-            pipeline_ci.pDepthStencilState = BS_RENDERER_SUBPASS_HAS_DEPTH(bs_scope.renderer->flags, 0) ? &depth_stencil_state : NULL; // todo should this be 0?
+            pipeline_ci.pDepthStencilState = BS_RENDERER_SUBPASS_HAS_DEPTH(_bs_scope.renderer->flags, 0) ? &depth_stencil_state : NULL; // todo should this be 0?
         else
             pipeline_ci.pDepthStencilState = &depth_stencil_state;
     }
@@ -1296,7 +1284,7 @@ bs_Pipeline* bs_pipeline(bs_PipelineHash* descriptor) {
     pipeline_ci.pStages = shader_stages;
     pipeline_ci.layout = existing->layout;
     if (!is_dynamic_renderer)
-        pipeline_ci.renderPass = bs_scope.renderer->render_pass;
+        pipeline_ci.renderPass = _bs_scope.renderer->render_pass;
     else
         pipeline_ci.pNext = &render_info;
     pipeline_ci.basePipelineIndex = -1;

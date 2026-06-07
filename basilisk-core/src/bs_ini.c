@@ -8,8 +8,6 @@
 #include <vulkan/vulkan_core.h>
 
 #include <basilisk.h>
-#include <bs_log.h>
-#include <bs_internal.h>
 
 const char* validation_layers[] = {
     "VK_LAYER_KHRONOS_validation"
@@ -744,10 +742,10 @@ void bs_load(
 {
     if (!_bs_instance->single_times_queue)
         _bs_instance->single_times_queue = bs_queue(BS_QUEUE(-1, 0, 0), BS_QUEUE_TRANSFER_BIT | BS_QUEUE_COMPUTE_BIT | BS_QUEUE_SINGLE_TIMES_BIT)->queue;
-    bs_scope.queue = _bs_instance->single_times_queue;
+    _bs_scope.queue = _bs_instance->single_times_queue;
 
     if (load_resources)
         load_resources();
 
-    bs_scope.queue = NULL;
+    _bs_scope.queue = NULL;
 }

@@ -6,6 +6,8 @@
 #include <bsgen_string.h>
 #include <bsgen_list.h>
 
+#define BSGEN_OUTPUT_PATH "../../../basilisk-core/include/"
+
 #define BSGEN_MIN(a,b) (((a)<(b))?(a):(b))
 #define BSGEN_MAX(a,b) (((a)>(b))?(a):(b))
 
@@ -68,6 +70,8 @@ typedef struct {
     char* name;
     char* type;
     char* comment;
+    int is_optional;
+    int can_be_nullable;
 } bsgen_Param;
 
 typedef struct {
@@ -297,7 +301,7 @@ static bsgen_Field bsgen_readField(xmlNode* node) {
 
     bsgen_Field field = {
         .name = xmlStrdup(name_node->children->content),
-        .type = xmlStrdup(type_node->children->content),
+        .type = type_node->children ? xmlStrdup(type_node->children->content) : NULL,
     };
 
     return field;
@@ -344,6 +348,10 @@ static bsgen_Param bsgen_readParam(xmlNode* node) {
         .name = xmlStrdup(name_node->children->content),
         .type = type_node ? xmlStrdup(type_node->children->content) : NULL,
         .comment = bsgen_getProperty(node, "comment"),
+        //.is_optional = ,
+        .can_be_nullable = type_node && (
+            strchr(type_node->children->content, '*') ||
+            strcmp(type_node->children->content, "bool") == 0),
     };
 
     return param;
@@ -514,7 +522,7 @@ static bsgen_String* bsgen_appendHeaderDefines(bsgen_String* string, const char*
   * Header Generation
   *============================================================================*/
 
-static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* library, const char* name, const char* header_id, const char* api_prefix) {
+static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* library, const char* name, const char* header_id, const char* api_prefix, const char* output_path) {
     string = bsgen_appendHeaderDefines(string, header_id);
 
    /**
@@ -523,16 +531,6 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
     for (int i = 0; i < library->includes.count; i++) {
         bsgen_Include* include = bsgen_fetchUnit(&library->includes, i);
         string = bsgen_appendStringF(string, "#include <%s>" BSGEN_NEWLINE, include->file);
-    }
-
-    string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
-
-   /**
-    Typedefs
-    */
-    for (int i = 0; i < library->typedefs.count; i++) {
-        bsgen_Typedef* _typedef = bsgen_fetchUnit(&library->typedefs, i);
-        string = bsgen_appendStringF(string, "typedef %s %s;" BSGEN_NEWLINE, _typedef->type, _typedef->name);
     }
 
     string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
@@ -577,6 +575,14 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
 
         string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
     }
+    
+   /**
+    Typedefs
+    */
+    for (int i = 0; i < library->typedefs.count; i++) {
+        bsgen_Typedef* _typedef = bsgen_fetchUnit(&library->typedefs, i);
+        string = bsgen_appendStringF(string, "typedef %s %s;" BSGEN_NEWLINE, _typedef->type, _typedef->name);
+    }
 
     string = bsgen_appendString(string, BSGEN_NEWLINE, BSGEN_STRING_LEN(BSGEN_NEWLINE));
 
@@ -589,7 +595,10 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
         
         for (int j = 0; j < structure->fields.count; j++) {
             bsgen_Field* field = bsgen_fetchUnit(&structure->fields, j);
-            string = bsgen_appendStringF(string, "    %s %s;" BSGEN_NEWLINE, field->type, field->name);
+            if (field->type)
+                string = bsgen_appendStringF(string, "    %s %s;" BSGEN_NEWLINE, field->type, field->name);
+            else
+                string = bsgen_appendStringF(string, "    %s;" BSGEN_NEWLINE, field->name);
         }
 
 #define BSGEN_STRUCT_END "};" BSGEN_NEWLINE BSGEN_NEWLINE
@@ -658,7 +667,7 @@ static bsgen_String* bsgen_generateHeader(bsgen_String* string, bsgen_Library* l
 
     string = bsgen_appendStringF(string, BSGEN_NEWLINE "#endif");
 
-    bsgen_saveFile(name, string->value, string->len);
+    bsgen_saveFileF(string->value, string->len, "%s%s", output_path, name);
 
     return string;
 }
@@ -694,6 +703,16 @@ static bsgen_String* bsgen_generateTrampolineFunctionParameters(bsgen_String* st
 }
 
 static bsgen_String* bsgen_generateTrampolineFunctionBody(bsgen_String* string, bsgen_Function* function, const char* table_name) {
+    if (strcmp(function->return_value, "bs_Result") == 0) {
+        for (int i = 0; i < function->params.count; i++) {
+            bsgen_Param* param = bsgen_fetchUnit(&function->params, i);
+
+            if (!param->is_optional && param->can_be_nullable) {
+                string = bsgen_appendStringF(string, "    if (!(%s))" BSGEN_NEWLINE "        return BS_RESULT_INVALID_PARAM;" BSGEN_NEWLINE BSGEN_NEWLINE, param->name);
+            }
+        }
+    }
+
     string = bsgen_appendStringF(string, "    return %s.%s(", table_name, function->name);
 
     for (int i = 0; i < function->params.count; i++) {
@@ -787,7 +806,7 @@ static bsgen_String* bsgen_generateStringTrampolineFunction(bsgen_Library* libra
     return string;
 }
 
-static bsgen_String* bsgen_generateTrampoline(bsgen_String* string, bsgen_Library* library, const char* file_name, const char* table_name) {
+static bsgen_String* bsgen_generateTrampoline(bsgen_String* string, bsgen_Library* library, const char* file_name, const char* table_name, const char* output_path) {
    /**
     Typedefs
     */
@@ -834,7 +853,6 @@ static bsgen_String* bsgen_generateTrampoline(bsgen_String* string, bsgen_Librar
         switch (function->variadic) {
             case 0: string = bsgen_generateTrampolineFunctionBody(string, function, table_name); break;
             case 1: string = bsgen_generateOriginalVariadicTrampolineFunction(library, string, function, table_name); break;
-            //case 1: string = bsgen_generateStringTrampolineFunction(library, string, function, table_name); break;
             case 'N': string = bsgen_generateStringTrampolineFunction(library, string, function, table_name); break;
             case 'F': string = bsgen_generateFormatTrampolineFunction(library, string, function); break;
             case 'V': string = bsgen_generateVariadicFormatTrampolineFunction(library, string, function); break;
@@ -843,9 +861,7 @@ static bsgen_String* bsgen_generateTrampoline(bsgen_String* string, bsgen_Librar
         string = bsgen_appendString(string, BSGEN_END_OF_FUNCTION, BSGEN_STRING_LEN(BSGEN_END_OF_FUNCTION));
     }
 
-    printf("%s" BSGEN_NEWLINE, string->value);
-
-    bsgen_saveFile(file_name, string->value, string->len);
+    bsgen_saveFileF(string->value, string->len, "%s%s", output_path, file_name);
 
     return string;
 }
@@ -885,12 +901,12 @@ int main(int argc, const char* argv[]) {
 
     string = bsgen_string(string, "", 0);
     string = bsgen_appendLicense(string, license_indented);
-    string = bsgen_generateHeader(string, &basilisk_core, "basilisk.h", "BASILISK_H", "BSAPI");
+    string = bsgen_generateHeader(string, &basilisk_core, "basilisk.h", "BASILISK_H", "BSAPI", BSGEN_OUTPUT_PATH);
 
     string = bsgen_string(string, "", 0);
     string = bsgen_appendLicense(string, license_indented);
     string = bsgen_appendStringF(string, "#include \"./basilisk.h\"" BSGEN_NEWLINE BSGEN_NEWLINE);
-    string = bsgen_generateTrampoline(string, &basilisk_core, "bs_validation.c", "_bs_functions");
+    string = bsgen_generateTrampoline(string, &basilisk_core, "bs_validation.c", "_bs_functions", BSGEN_OUTPUT_PATH);
 
     free(string);
 

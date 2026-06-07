@@ -3,13 +3,15 @@
 	<includes>
 		<include>stdarg.h</include>
 		<include>string.h</include>
+		<include>stdbool.h</include>
 	</includes>
-	
+
 	<typedefs>
 		<typedef><type>long long</type><name>bs_I64</name></typedef>
 		<typedef><type>int</type><name>bs_I32</name></typedef>
 		<typedef><type>short</type><name>bs_I16</name></typedef>
 		<typedef><type>char</type><name>bs_I8</name></typedef>
+		<typedef><type>void*</type><name>bs_JsonObject</name></typedef>
 		
 		<typedef><type>unsigned long long</type><name>bs_U64</name></typedef>
 		<typedef><type>unsigned int</type><name>bs_U32</name></typedef>
@@ -41,6 +43,7 @@
 		<typedef><type>bs_U32</type><name>bs_AnimationFlags</name></typedef>
 		<typedef><type>bs_U32</type><name>bs_SaveJsonBits</name></typedef>
 		<typedef><type>void</type><name>(*bs_Callback)()</name></typedef>
+		<typedef><type>BS_VERTEX_DECLARATION_STRUCTURE()</type><name>bs_VertexDeclaration</name></typedef>
 	</typedefs>
 	
 	<enums>
@@ -843,7 +846,7 @@
             <line>(action, __VA_ARGS__)</line>
 		</macro>
     
-		<macro><name>BS_MAX_NUM_BINDINGS</name><line>32</line></macro>
+		<macro><name>#define BS_MAX_NUM_BINDINGS</name><line>32</line></macro>
 		<macro><name>#define BS_MAX_NUM_BIND_SETS</name><line>32</line></macro>
 		<macro><name>#define BS_MAX_NUM_QUEUES</name><line>8</line></macro>
 		<macro><name>#define BS_MAX_NUM_SIGNALS</name><line>8</line></macro>
@@ -1550,8 +1553,6 @@
             <field><type>bs_U32</type><name>num</name></field>
             <field><type>bs_Batch*</type><name>batch</name></field>
         </structure>
-        <structure name="bs_Vertex">
-        </structure>
         <structure name="bs_Header">
             <field><type>int</type><name>id</name></field>
             <field><type>int</type><name>source_id</name></field>
@@ -1761,6 +1762,9 @@
             <field><type>bs_U32</type><name>attachment</name></field>
             <field><type>bs_Image*</type><name>image</name></field>
         </structure>
+		<structure name="bs_RendererSwaps">
+			<field><type>struct VkFramebuffer_T*</type><name>framebuffer</name></field>
+		</structure>
         <structure name="bs_Renderer">
             <field><type>bs_Header</type><name>head</name></field>
             <field><type>bs_RendererBits</type><name>flags</name></field>
@@ -1771,8 +1775,6 @@
             <field><type>int</type><name>num_subpasses</name></field>
             <field><type>int</type><name>num_dependencies</name></field>
             <field><type>bs_ivec2</type><name>dim</name></field>
-        </structure>
-        <structure name="bs_RendererSwaps">
         </structure>
         <structure name="bs_Batch">
             <field><type>bs_Header</type><name>head</name></field>
@@ -1805,8 +1807,18 @@
         <structure name="bs_ShaderGroup">
             <field><type>bs_Shader*</type><name>shader</name></field>
         </structure>
-        <structure name="bs_JsonArray">
-        </structure>
+        <structure name="bs_JsonArray" type="union">
+			<field><type>unsigned char*</type><name>as_uchars</name></field>
+			<field><type>float*</type><name>as_floats</name></field>
+			<field><type>int*</type><name>as_ints</name></field>
+			<field><type>bs_F64*</type><name>as_numbers</name></field>
+			<field><type>char**</type><name>as_strings</name></field>
+			<field><type>bs_JsonObject*</type><name>as_objects</name></field>
+			<field><type>bool*</type><name>as_bools</name></field>
+			<field><type>bs_vec2*</type><name>vec2</name></field>
+			<field><type>bs_vec3*</type><name>vec3</name></field>
+			<field><type>bs_vec4*</type><name>vec4</name></field>
+		</structure>
         <structure name="bs_Json">
             <field><type>bool</type><name>is_mutable</name></field>
             <field><type>void*</type><name>doc</name></field>
@@ -2158,7 +2170,12 @@
             <field><type>bs_Binding*</type><name>bindings</name></field>
             <field><type>bs_Descriptor*</type><name>descriptors</name></field>
             <field><type>bool</type><name>descriptor_pool_needs_update</name></field>
-        </structure>
+			<field><type>struct VkInstance_T*</type><name>instance</name></field>
+			<field><type>struct VkPhysicalDevice_T*</type><name>physical_device</name></field>
+			<field><type>struct VkDevice_T*</type><name>device</name></field>
+			<field><type>struct VkCommandPool_T*</type><name>command_pool</name></field>
+			<field><type>struct VkSurfaceKHR_T*</type><name>surface</name></field>
+		</structure>
         <structure name="bs_Bindings" instance="_bs_bind">
             <field><type>bs_BindSet*</type><name>bs_bind_sets</name></field>
             <field><type>int</type><name>bs_bind_sets_count</name></field>
@@ -2288,20 +2305,24 @@
             <field><type>long</type><name>high_part</name></field>
             <field><type>long long</type><name>quad_part</name></field>
         </structure>
+		<structure name="bs_Procs">
+			<field><type></type><name>BS_FOREACH_PROC(BS_STRUCT_GEN)</name></field>
+		</structure>
     </structures>
 
 	<externs>
 		<extern><type>bs_IO</type><name>bs_io</name></extern>
 		<extern><type>bs_Window</type><name>bs_wnd</name></extern>
-		<extern><type>bs_Instance</type><name>bs_instance</name></extern>
+		<extern><type>bs_Instance*</type><name>bs_instance</name></extern>
 		<extern><type>bs_Bindings</type><name>bs_bind</name></extern>
-		<extern><type>bs_Swapchain</type><name>bs_swapchain</name></extern>
+		<extern><type>bs_Swapchain*</type><name>bs_swapchain</name></extern>
 		<extern><type>bs_Config</type><name>bs_config</name></extern>
 		<extern><type>bs_Scope</type><name>bs_scope</name></extern>
 		<extern><type>bs_Args</type><name>bs_args</name></extern>
 		<extern><type>bs_Features</type><name>bs_features</name></extern>
 		<extern><type>bs_Props</type><name>bs_props</name></extern>
 		<extern><type>bs_Settings</type><name>bs_settings</name></extern>
+		<extern><type>bs_Procs</type><name>bs_procs</name></extern>
 	</externs>
 	
     <functions>
@@ -3448,16 +3469,33 @@
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>old</name></param>
             <param><type>char*</type><name>data</name></param>
-            <param><type>int</type><name>len</name></param>
         </function>
         <function name="bs_emptyString">
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>old</name></param>
         </function>
-        <function name="bs_string" stringFormat="value">
+		<function name="bs_string">
             <return>bs_String*</return>
             <param><type>bs_String*</type><name>old</name></param>
             <param><type>char*</type><name>value</name></param>
+        </function>
+        <function name="bs_stringN">
+            <return>bs_String*</return>
+            <param><type>bs_String*</type><name>old</name></param>
+            <param><type>char*</type><name>value</name></param>
+            <param><type>int</type><name>value_length</name></param>
+        </function>
+		<function name="bs_stringF">
+            <return>bs_String*</return>
+            <param><type>bs_String*</type><name>old</name></param>
+            <param><type>char*</type><name>format</name></param>
+            <param><name>...</name></param>
+        </function>
+		<function name="bs_stringV">
+            <return>bs_String*</return>
+            <param><type>bs_String*</type><name>old</name></param>
+            <param><type>char*</type><name>format</name></param>
+            <param><type>va_list</type><name>args</name></param>
         </function>
         <function name="bs_toUpper">
             <return>void</return>

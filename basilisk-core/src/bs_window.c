@@ -9,14 +9,7 @@
 
 #include <time.h>
 
-#include <bs_log.h>
-#include <bs_math.h>
-#include <bs_types.h>
-#include <bs_window.h>
-#include <bs_core.h>
-#include <bs_internal.h>
-#include <bs_images.h>
-#include <bs_shaders.h>
+#include <basilisk.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
 #include <vssym32.h>

@@ -6,10 +6,8 @@
  * See README for more details.
  */
 
-#include <bs_types.h>
-#include <bs_log.h>
+#include <basilisk.h>
 #include <string.h>
-#include <bs_base64.h>
 
 static const unsigned char base64_table[65] =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

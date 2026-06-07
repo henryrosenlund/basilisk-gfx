@@ -1,8 +1,4 @@
 #include <basilisk.h>
-#include <bs_log.h>
-#include <bs_objects.h>
-#include <bs_internal.h>
-#include <bs_images.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -15,11 +11,11 @@
 #include <vulkan.h>
 
 struct VkCommandBuffer_T* bsi_fetchCommands() {
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT)
-        bsi_resetQueue(bs_scope.queue);
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT)
+        bsi_resetQueue(_bs_scope.queue);
 
-    int swap = bs_queueSwap(bs_scope.queue);
-    return bs_scope.queue->_[swap].command_buffer;
+    int swap = bs_queueSwap(_bs_scope.queue);
+    return _bs_scope.queue->_[swap].command_buffer;
 }
 
 struct VkDevice_T* bsi_fetchDevice() {
@@ -417,9 +413,9 @@ void bs_copyAsync(bs_Buffer* src, bs_Buffer* dst, bs_U32 dst_offset, bs_U32 src_
     assert(src->_[src_swap].vk_buffer);
     assert(dst->_[dst_swap].vk_buffer);
     vkCmdCopyBuffer(commands, src->_[src_swap].vk_buffer, dst->_[dst_swap].vk_buffer, 1, &copy_region);
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -427,9 +423,9 @@ void bs_setBufferAsync(bs_Buffer* buffer, bs_U32 offset, bs_U32 num_bytes, bs_U3
     VkCommandBuffer commands = bsi_fetchCommands();
     int swap = buffer->flags & BSI_BUFFER_SWAPS_BIT ? _bs_swapchain->frame : 0;
     vkCmdFillBuffer(commands, buffer->_[swap].vk_buffer, offset, num_bytes, value);
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -1561,10 +1557,10 @@ bool bs_rendererIsDynamic(bs_Renderer* renderer) {
 void bs_beginRender(bs_Renderer* renderer) {
     assert(renderer != NULL);
 
-    if (bs_scope.renderer)
+    if (_bs_scope.renderer)
         return bs_throwBasiliskF(BSX_INVALID_STATE, "Cannot dynamically render within a render pass");
 
-    bs_scope.renderer = renderer;
+    _bs_scope.renderer = renderer;
 
     VkCommandBuffer command_buffer = bsi_fetchCommands();
 
@@ -1580,7 +1576,7 @@ void bs_beginRender(bs_Renderer* renderer) {
     }
 
     if (renderer->render_pass) {
-        bs_scope.renderer = renderer;
+        _bs_scope.renderer = renderer;
 
         VkRenderPassBeginInfo render_pass_i = {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -1664,15 +1660,15 @@ void bs_beginRender(bs_Renderer* renderer) {
 void bs_endRender(bs_Renderer* renderer) {
     VkCommandBuffer command_buffer = bsi_fetchCommands();
     if (renderer->render_pass) {
-        bs_scope.renderer = renderer;
+        _bs_scope.renderer = renderer;
         vkCmdEndRenderPass(command_buffer);
     }
     else {
         _bs_procs.vkCmdEndRenderingKHR(bsi_fetchCommands());
     }
 
-    bs_scope.renderer = NULL;
-    bs_scope.subpass = 0;
+    _bs_scope.renderer = NULL;
+    _bs_scope.subpass = 0;
 }
 
 void bs_runPass(bs_Renderer* renderer, ...) {
@@ -1686,7 +1682,7 @@ void bs_runPass(bs_Renderer* renderer, ...) {
             bs_Callback callback = va_arg(args, bs_Callback);
             if (!callback) break;
             if (i != 0) {
-                bs_scope.subpass = i;
+                _bs_scope.subpass = i;
                 vkCmdNextSubpass(command_buffer, VK_SUBPASS_CONTENTS_INLINE);
             }
 
@@ -1771,9 +1767,9 @@ void bs_dispatchAsync(bs_Pipeline* pipeline, bs_U32 x, bs_U32 y, bs_U32 z) {
 
     vkCmdDispatch(command_buffer, x, y, z);
 
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -1893,7 +1889,7 @@ static bs_Result bs_buildBLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
 
     bsi_fetchCommands();
 
-    bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
+    _bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
 
     bs_Batch* batch = *(bs_Batch**)bs_fetchUnit(&tracer->batches, 0);
 
@@ -1996,10 +1992,10 @@ static bs_Result bs_buildBLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
     VkAccelerationStructureBuildRangeInfoKHR* pRangeInfo = &aabb_range_info;
 
     _bs_procs.vkCmdBuildAccelerationStructuresKHR(bsi_fetchCommands(), 1, &build_info, &pRangeInfo);
-    bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
+    _bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
 
-    bsi_pushQueue(bs_scope.queue);
-    bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    bsi_pushQueue(_bs_scope.queue);
+    bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
 
     return BS_RESULT_OK;
 }
@@ -2008,7 +2004,7 @@ static bs_Result bs_buildTLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
     bs_Result result;
 
     VkCommandBuffer cmds = bsi_fetchCommands();
-    bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
+    _bs_scope.queue->flags &= ~BS_QUEUE_SINGLE_TIMES_BIT;
 
     VkAccelerationStructureDeviceAddressInfoKHR address_info = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR };
     address_info.accelerationStructure = tracer->BLAS;
@@ -2139,10 +2135,10 @@ static bs_Result bs_buildTLAS(bs_RayTracer* tracer, bs_Buffer* staging_buffer) {
     VkAccelerationStructureBuildRangeInfoKHR* p_range_info = &range_info;
 
     _bs_procs.vkCmdBuildAccelerationStructuresKHR(bsi_fetchCommands(), 1, &build_info, &p_range_info);
-    bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
+    _bs_scope.queue->flags |= BS_QUEUE_SINGLE_TIMES_BIT;
 
-    bsi_pushQueue(bs_scope.queue);
-    bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    bsi_pushQueue(_bs_scope.queue);
+    bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
 
     return BS_RESULT_OK;
 }
@@ -2196,9 +2192,9 @@ void bs_barrier(bs_U32 dependency_flags, bs_U32 src_stage, bs_U32 dst_stage, bs_
         },
         0, NULL, 0, NULL);
 
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -2370,15 +2366,15 @@ void bs_destroyQueue(bs_Queue* queue) {
 
 void bs_awaitQueue(bs_Queue* queue, bs_PipelineStage stage) {
     int swap = bs_queueSwap(queue);
-    bs_scope.wait_semaphores[bs_scope.wait_num] = queue->_[swap].semaphore;
-    bs_scope.wait_stages[bs_scope.wait_num] = (VkPipelineStageFlags)stage;
-    bs_scope.wait_num++;
+    _bs_scope.wait_semaphores[_bs_scope.wait_num] = queue->_[swap].semaphore;
+    _bs_scope.wait_stages[_bs_scope.wait_num] = (VkPipelineStageFlags)stage;
+    _bs_scope.wait_num++;
 }
 
 void bs_awaitAcquisition() {
-    bs_scope.wait_semaphores[bs_scope.wait_num] = _bs_swapchain->_[_bs_swapchain->frame].semaphore;
-    bs_scope.wait_stages[bs_scope.wait_num] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    bs_scope.wait_num++;
+    _bs_scope.wait_semaphores[_bs_scope.wait_num] = _bs_swapchain->_[_bs_swapchain->frame].semaphore;
+    _bs_scope.wait_stages[_bs_scope.wait_num] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    _bs_scope.wait_num++;
 }
 
 void bs_stallQueue(bs_Queue* queue) {
@@ -2415,9 +2411,9 @@ bool bs_poll(bs_Queue* queue) {
 }
 
 void bsi_resetQueue(bs_Queue* queue) {
-    bs_scope.queue = queue;
+    _bs_scope.queue = queue;
 
-    if (bs_scope.has_begun) {
+    if (_bs_scope.has_begun) {
         bs_throwBasilisk(BSX_GENERAL);
         return;
     }
@@ -2432,12 +2428,12 @@ void bsi_resetQueue(bs_Queue* queue) {
     bs_throwVulkan(vkResetCommandBuffer(command_buffer, 0));
     bs_throwVulkan(vkBeginCommandBuffer(command_buffer, &ci));
 
-    bs_scope.has_begun = true;
+    _bs_scope.has_begun = true;
 }
 
 void bsi_pushQueue(bs_Queue* queue) {
-    assert(bs_scope.has_begun);
-    if (!bs_scope.has_begun)
+    assert(_bs_scope.has_begun);
+    if (!_bs_scope.has_begun)
         bs_throwBasilisk(BSX_GENERAL);
 
     int swap = bs_queueSwap(queue);
@@ -2450,13 +2446,13 @@ void bsi_pushQueue(bs_Queue* queue) {
         .pSignalSemaphores = &queue->_[swap].semaphore,
         .commandBufferCount = 1,
         .pCommandBuffers = &command_buffer,
-        .waitSemaphoreCount = bs_scope.wait_num,
-        .pWaitDstStageMask = bs_scope.wait_stages,
-        .pWaitSemaphores = bs_scope.wait_semaphores
+        .waitSemaphoreCount = _bs_scope.wait_num,
+        .pWaitDstStageMask = _bs_scope.wait_stages,
+        .pWaitSemaphores = _bs_scope.wait_semaphores
     };
 
     bs_throwVulkan(vkQueueSubmit(queue->queue, 1, &submit_i, queue->_->fence ? queue->_[swap].fence : NULL));
-    bs_scope.has_begun = false;
+    _bs_scope.has_begun = false;
 }
 
 void bs_enqueue(bs_Queue* queue, bs_Callback function) {

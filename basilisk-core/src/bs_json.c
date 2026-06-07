@@ -5,12 +5,7 @@
 #include <assert.h>
 #include <string.h>
 
-#include <bs_types.h>
-#include <bs_mem.h>
-#include <bs_ini.h>
-#include <bs_json.h>
-#include <bs_log.h>
-#include <bs_internal.h>
+#include <basilisk.h>
 #include <yyjson.h>
 
 bs_Json bs_jsonRoot(bs_Json* json, bs_JsonObject obj) {

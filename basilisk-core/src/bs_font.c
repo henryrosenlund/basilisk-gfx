@@ -5,15 +5,7 @@
 #include <stdbool.h>
 #include <assert.h>
 
-#include <bs_font.h>
-#include <bs_ini.h>
-#include <bs_mem.h>
-#include <bs_math.h>
-#include <bs_core.h>
-#include <bs_shaders.h>
-#include <bs_images.h>
-#include <bs_log.h>
-#include <lodepng.h>
+#include <basilisk.h>
 
 #define BS_FLAGSET(flag, cmp) ((flag >> cmp) & 0x01)
 

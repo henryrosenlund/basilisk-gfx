@@ -1,16 +1,9 @@
-#include <bs_enums.h>
-#include <bs_mem.h>
-#include <bs_internal.h>
-#include <bs_shaders.h>
+#include <basilisk.h>
 
 #include <stdarg.h>
 #include <string.h>
-#include <bs_log.h>
-#include <bs_json.h>
-#include <bs_window.h>
 
 #ifdef _WIN32 // lol
-#include <bs_http.h>
 #include <windows.h>
 #include <DbgHelp.h>
 #endif

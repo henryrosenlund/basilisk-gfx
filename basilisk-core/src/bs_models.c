@@ -11,17 +11,7 @@
 #include <math.h>
 #include <direct.h>
 
-#include <bs_mem.h>
-#include <bs_core.h>
-#include <bs_math.h>
-#include <bs_models.h>
-#include <bs_shaders.h>
-#include <bs_images.h>
-#include <bs_ini.h>
-#include <bs_log.h>
-#include <bs_json.h>
-#include <bs_internal.h>
-#include <bs_window.h>
+#include <basilisk.h>
 
 
 

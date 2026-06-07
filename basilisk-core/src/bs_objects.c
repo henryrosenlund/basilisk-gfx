@@ -14,18 +14,7 @@
 #include <unistd.h>
 #endif
 
-#include <bs_core.h>s
-#include <bs_log.h>
-#include <bs_images.h>
-#include <bs_ini.h>
-#include <bs_math.h>
-#include <bs_mem.h>
-#include <bs_models.h>
-#include <bs_shaders.h>
-#include <bs_types.h>
-#include <bs_internal.h>
-#include <bs_audio.h>
-
+#include <basilisk.h>s
 #include <vulkan.h>
 
 bs_List _bs_packages = { 

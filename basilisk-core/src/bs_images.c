@@ -1,14 +1,3 @@
-// Basilisk
-#include <bs_shaders.h>
-#include <bs_core.h>
-#include <bs_math.h>
-#include <bs_mem.h>
-#include <bs_images.h>
-#include <bs_ini.h>
-#include <bs_log.h>
-#include <bs_internal.h>
-#include <bs_json.h>
-
 // STD
 #include <stdio.h>
 #include <string.h>
@@ -17,8 +6,8 @@
 #include <winreg.h>
 #include <assert.h>
 
+#include <basilisk.h>
 #include <vulkan.h>
-#include <lodepng.h>
 
 static inline bs_U32 bs_queryMemoryType(bs_U32 filter, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties mem_props;
@@ -234,9 +223,9 @@ void bs_transition(bs_Image* image, int index, bs_ImageLayout old_layout, bs_Ima
         0, NULL,
         1, &barrier);
 
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 
@@ -730,9 +719,9 @@ void bs_copyBufferToImage(bs_Buffer* buffer, bs_Image* image, int index, bs_Imag
         1,
         &region);
 
-    if (bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
-        bsi_pushQueue(bs_scope.queue);
-        bs_throwVulkan(vkQueueWaitIdle(bs_scope.queue->queue));
+    if (_bs_scope.queue->flags & BS_QUEUE_SINGLE_TIMES_BIT) {
+        bsi_pushQueue(_bs_scope.queue);
+        bs_throwVulkan(vkQueueWaitIdle(_bs_scope.queue->queue));
     }
 }
 

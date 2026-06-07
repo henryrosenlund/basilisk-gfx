@@ -1,6 +1,4 @@
 #include <basilisk.h>
-#include <bs_log.h>
-#include <bs_internal.h>
 #include <mmreg.h>
 #include <tchar.h>
 #include <windows.h>
